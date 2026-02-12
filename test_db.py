@@ -3,13 +3,18 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-url = os.getenv('SUPABASE_DB_URL')
+# Get the RAW URL (without the ?sslmode=... at the end)
+url = os.getenv('SUPABASE_DB_URL').split('?')[0]
 
 try:
-    print(f"Connecting to: {url.split('@')[1]}")
-    # We add connect_timeout and sslmode here as backups
-    conn = psycopg2.connect(url, connect_timeout=10)
-    print("Success! The hangar doors are open.")
+    print(f"Directing ambulance to: {url.split('@')[1]}")
+    # Force SSL and set a longer timeout
+    conn = psycopg2.connect(
+        url,
+        sslmode='require',
+        connect_timeout=15
+    )
+    print("Success! Hangar doors are open.")
     conn.close()
 except Exception as e:
-    print(f"Connection failed: {e}")
+    print(f"Handshake failed: {e}")
