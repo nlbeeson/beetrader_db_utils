@@ -37,6 +37,7 @@ def run_sidbot_scanner():
     # 1. PRUNE: Hard cutoff at 28 days from original touch
     logger.info("Pruning expired signals (28-day window)...")
     cutoff = (datetime.now() - timedelta(days=28)).isoformat()
+    # Fix: Prune based on rsi_touch_date instead of last_updated to avoid daily refreshes
     supabase.table("signal_watchlist").delete().lt("rsi_touch_date", cutoff).execute()
 
     # 2. LOAD DATA
@@ -105,9 +106,17 @@ def run_sidbot_scanner():
                 is_ready = align and earnings_safe
                 macd_cross = curr_macd > curr_sig if direction == 'LONG' else curr_macd < curr_sig
 
+                # Maintain original touch date to ensure the 28-day expiry works correctly
+                # We use the existing date if available and if the direction hasn't flipped
+                existing_date = existing.get('rsi_touch_date') if existing else None
+                if existing and existing.get('direction') != direction:
+                    existing_date = None # Reset if signal flipped LONG <-> SHORT
+                
+                touch_date = existing_date if existing_date else datetime.now().isoformat()
+
                 bulk_results.append({
                     "symbol": symbol, "direction": direction, "rsi_touch_value": float(curr_rsi),
-                    "rsi_touch_date": existing['rsi_touch_date'] if existing else datetime.now().isoformat(),
+                    "rsi_touch_date": touch_date,
                     "extreme_price": float(ext_price), "atr": float(atr_val), "is_ready": is_ready,
                     "next_earnings": report_date_str,
                     "logic_trail": {
