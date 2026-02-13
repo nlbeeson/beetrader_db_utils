@@ -26,7 +26,7 @@ def generate_html_report():
         d_rsi, w_rsi = trail.get('d_rsi', 0), trail.get('w_rsi', 0)
         slope, cross = trail.get('macd_ready', False), trail.get('macd_cross', False)
 
-        # Earnings Processing with Countdown
+        # Earnings countdown logic
         earn_val = row.get('next_earnings', 'N/A')
         earn_disp = earn_val
         if earn_val and earn_val != 'N/A':
@@ -35,8 +35,6 @@ def generate_html_report():
                 days = (dt - datetime.now().date()).days
                 countdown = f"{days}d" if days >= 0 else "Past"
                 earn_disp = f"{dt.strftime('%b %d')} ({countdown})"
-
-                # Highlight if within 14-day safety window
                 if 0 <= days <= 14:
                     earn_disp = f'<span style="color:#e74c3c;font-weight:bold;">⚠️ {earn_disp}</span>'
             except:
@@ -46,9 +44,9 @@ def generate_html_report():
         score = 1 + (1 if slope else 0) + (1 if cross else 0)
         color = "#27ae60" if direction == "LONG" else "#e74c3c"
 
-        html_row = f"""
+        row_html = f"""
             <tr>
-                <td style="padding:10px;border:1px solid #ddd;text-align:center;"><a href="{get_tv_url(symbol)}" style="color:#2962ff;font-weight:bold;">{symbol}</a></td>
+                <td style="padding:10px;border:1px solid #ddd;text-align:center;"><a href="{get_tv_url(symbol)}" style="color:#2962ff;font-weight:bold;text-decoration:none;">{symbol}</a></td>
                 <td style="padding:10px;border:1px solid #ddd;text-align:center;"><span style="background:{color};color:white;padding:2px 6px;border-radius:4px;font-size:11px;">{direction}</span></td>
                 <td style="padding:10px;border:1px solid #ddd;text-align:center;font-weight:bold;">{score}/3</td>
                 <td style="padding:10px;border:1px solid #ddd;text-align:center;">D:{d_rsi:.1f} W:{w_rsi:.1f}</td>
@@ -57,9 +55,9 @@ def generate_html_report():
                 <td style="padding:10px;border:1px solid #ddd;text-align:center;font-size:12px;">{earn_disp}</td>
             </tr>"""
         if row['is_ready']:
-            conf_rows += html_row
+            conf_rows += row_html
         else:
-            pot_rows += html_row
+            pot_rows += row_html
 
     return f"""<html><body style="font-family:sans-serif;color:#333;line-height:1.6;"><div style="max-width:950px;margin:auto;padding:20px;">
         <h2 style="text-align:center;color:#2c3e50;">SidBot Daily Intelligence</h2>
@@ -80,7 +78,7 @@ def send_report():
     resend.Emails.send({
         "from": "SidBot Advisor <advisor@notifications.natebeeson.com>",
         "to": [EMAIL_RECEIVER],
-        "subject": f"SidBot Intelligence - {datetime.now().strftime('%b %d')}",
+        "subject": f"SidBot Daily Report - {datetime.now().strftime('%b %d')}",
         "html": html_body
     })
     print("✅ Report Sent.")

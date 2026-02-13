@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 
 
 def get_weekly_rsi_resampled(df_daily):
-    """Resamples Daily data to Weekly to calculate 14-period RSI."""
     temp_df = df_daily.copy()
     temp_df['timestamp'] = pd.to_datetime(temp_df['timestamp'])
     temp_df.set_index('timestamp', inplace=True)
@@ -34,26 +33,18 @@ def run_sidbot_scanner():
     clients = get_clients()
     supabase = clients['supabase_client']
 
-    # 1. PRUNE: Remove signals older than 21 days
     logger.info("🧹 Pruning signals older than 21 days...")
     cutoff = (datetime.now() - timedelta(days=21)).isoformat()
     supabase.table("signal_watchlist").delete().lt("last_updated", cutoff).execute()
 
-    # 2. FETCH FULL MASTER LIST
-    symbols = []
-    offset = 0
-    while True:
-        resp = supabase.table("ticker_metadata").select("symbol").range(offset, offset + 999).execute()
-        batch = [item['symbol'] for item in resp.data]
-        symbols.extend(batch)
-        if len(batch) < 1000: break
-        offset += 1000
-
-    # 3. PRE-LOAD MAPS
+    # Pre-load maps for efficiency
     watchlist_resp = supabase.table("signal_watchlist").select("*").execute()
     watchlist_map = {item['symbol']: item for item in watchlist_resp.data}
     earn_resp = supabase.table("earnings_calendar").select("*").execute()
     earnings_map = {item['symbol']: item['report_date'] for item in earn_resp.data}
+
+    active_tickers_resp = supabase.table("market_data").select("symbol").eq("timeframe", "1Day").execute()
+    symbols = list(set([item['symbol'] for item in active_tickers_resp.data]))
 
     logger.info(f"🔎 Scanning {len(symbols)} symbols...")
     bulk_results = []
@@ -77,22 +68,21 @@ def run_sidbot_scanner():
             curr_rsi, prev_rsi = rsi_ser.iloc[-1], rsi_ser.iloc[-2]
             curr_macd, prev_macd, curr_sig = macd_line.iloc[-1], macd_line.iloc[-2], signal_line.iloc[-1]
             curr_w_rsi, prev_w_rsi = get_weekly_rsi_resampled(df_daily)
-
             if curr_w_rsi is None: continue
 
             direction = 'LONG' if curr_rsi <= 30 else ('SHORT' if curr_rsi >= 70 else None)
-            existing_data = watchlist_map.get(symbol)
+            existing = watchlist_map.get(symbol)
 
-            if direction or existing_data:
-                final_dir = direction if direction else existing_data['direction']
-                ext_price = existing_data['extreme_price'] if existing_data else df_daily['close'].iloc[-1]
+            if direction or existing:
+                final_dir = direction if direction else existing['direction']
+                ext_price = existing['extreme_price'] if existing else df_daily['close'].iloc[-1]
 
                 if final_dir == 'LONG':
                     ext_price = min(df_daily['low'].iloc[-1], ext_price)
                 else:
                     ext_price = max(df_daily['high'].iloc[-1], ext_price)
 
-                # --- EARNINGS CHECK (14-DAY RULE) ---
+                # --- 14-DAY EARNINGS CHECK ---
                 report_date_str = earnings_map.get(symbol)
                 earnings_safe = True
                 if report_date_str:
@@ -100,14 +90,17 @@ def run_sidbot_scanner():
                     days_to = (report_date - datetime.now().date()).days
                     if 0 <= days_to <= 14: earnings_safe = False
 
-                # --- HARD RULES ---
-                rsi_up = curr_rsi > prev_rsi if final_dir == 'LONG' else curr_rsi < prev_rsi
-                w_rsi_up = curr_w_rsi > prev_w_rsi if final_dir == 'LONG' else curr_w_rsi < prev_w_rsi
-                macd_slope_ready = curr_macd > prev_macd if final_dir == 'LONG' else curr_macd < prev_macd
+                # --- MOMENTUM ALIGNMENT (Corrected Short Logic) ---
+                if final_dir == 'LONG':
+                    rsi_align = curr_rsi > prev_rsi
+                    w_rsi_align = curr_w_rsi > prev_w_rsi
+                    macd_slope = curr_macd > prev_macd
+                else:  # SHORT
+                    rsi_align = curr_rsi < prev_rsi
+                    w_rsi_align = curr_w_rsi < prev_w_rsi
+                    macd_slope = curr_macd < prev_macd
 
-                is_ready = all([rsi_up, w_rsi_up, macd_slope_ready, earnings_safe])
-
-                # --- SECONDARY CONFIRMATION ---
+                is_ready = all([rsi_align, w_rsi_align, macd_slope, earnings_safe])
                 macd_cross = curr_macd > curr_sig if final_dir == 'LONG' else curr_macd < curr_sig
 
                 bulk_results.append({
@@ -116,21 +109,29 @@ def run_sidbot_scanner():
                     "next_earnings": report_date_str,
                     "logic_trail": {
                         "d_rsi": float(curr_rsi), "w_rsi": float(curr_w_rsi),
-                        "macd_ready": bool(macd_slope_ready), "macd_cross": bool(macd_cross)
+                        "macd_ready": bool(macd_slope), "macd_cross": bool(macd_cross)
                     },
                     "last_updated": datetime.now().isoformat()
                 })
 
                 if len(bulk_results) >= 100:
-                    supabase.table("signal_watchlist").upsert(bulk_results, on_conflict="symbol,direction").execute()
-                    bulk_results = []
+                    try:
+                        supabase.table("signal_watchlist").upsert(bulk_results,
+                                                                  on_conflict="symbol,direction").execute()
+                        bulk_results = []
+                    except Exception as e:
+                        logger.error(f"❌ Batch upsert failed: {e}")
 
         except Exception as e:
             logger.error(f"❌ Error scanning {symbol}: {e}")
 
     if bulk_results:
-        supabase.table("signal_watchlist").upsert(bulk_results, on_conflict="symbol,direction").execute()
-    logger.info("🏁 Scan complete.")
+        try:
+            supabase.table("signal_watchlist").upsert(bulk_results, on_conflict="symbol,direction").execute()
+        except Exception as e:
+            logger.error(f"❌ Final cleanup upsert failed: {e}")
+
+    logger.info("🏁 Final scanner run complete.")
 
 
 if __name__ == "__main__":
