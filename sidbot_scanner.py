@@ -114,7 +114,11 @@ def run_sidbot_scanner():
                 else:  # SHORT
                     align = (curr_rsi < prev_rsi) and (curr_w_rsi < prev_w_rsi) and (curr_macd < prev_macd)
 
-                is_ready = align and earnings_safe
+                #is_ready = align and earnings_safe
+                # Convert numpy/pandas booleans to native Python bools for JSON serialization
+                is_ready = bool(align and earnings_safe)
+                macd_align_native = bool(align)
+                macd_cross_native = bool(curr_macd > curr_sig if direction == 'LONG' else curr_macd < curr_sig)
                 macd_cross = curr_macd > curr_sig if direction == 'LONG' else curr_macd < curr_sig
 
                 # Maintain original touch date to ensure the 28-day expiry works correctly
