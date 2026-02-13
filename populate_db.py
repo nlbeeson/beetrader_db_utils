@@ -31,29 +31,21 @@ def get_ticker_universe():
 
     try:
         res = requests.get(iwv_url, headers=headers)
-        # Read raw lines to find where the data actually starts
-        lines = res.text.splitlines()
-        header_idx = 0
-        for i, line in enumerate(lines):
-            if 'Ticker' in line or 'Symbol' in line:
-                header_idx = i
-                break
+        # Use skiprows=9 as confirmed by your check_csv.py
+        df = pd.read_csv(io.StringIO(res.text), skiprows=9)
 
-        # Read again starting from the correct header row
-        df = pd.read_csv(io.StringIO('\n'.join(lines[header_idx:])))
-
-        # Handle cases where column might be named 'Symbol' instead of 'Ticker'
-        ticker_col = 'Ticker' if 'Ticker' in df.columns else 'Symbol'
-
-        equities = [str(t).strip() for t in df[ticker_col].dropna().unique()
+        # Filter for pure equity tickers (5 chars or less, all letters)
+        # This automatically skips 'CASH_USD', '-', etc.
+        equities = [str(t).strip() for t in df['Ticker'].dropna().unique()
                     if len(str(t)) <= 5 and str(t).isalpha()]
 
-        print(f"✅ Scraped {len(equities)} equities from Russell 3000.")
+        print(f"✅ Scraped {len(equities)} equities from the Russell 3000 list.")
 
     except Exception as e:
-        print(f"⚠️ Russell 3000 scrape failed ({e}), using fallback small list.")
+        print(f"⚠️ Russell 3000 scrape failed ({e}). Using fallback list.")
         equities = ['AAPL', 'MSFT', 'TSLA', 'AMZN', 'GOOGL']
 
+    # Your Forex and Crypto lists
     forex = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'AUD/USD', 'USD/CAD', 'USD/CHF', 'NZD/USD',
              'EUR/JPY', 'GBP/JPY', 'GBP/NZD', 'EUR/NZD', 'CHF/JPY', 'GBP/AUD', 'GBP/CAD',
              'GBP/CHF', 'NZD/JPY', 'EUR/CAD', 'CAD/JPY', 'AUD/NZD', 'AUD/JPY', 'NZD/CHF',
