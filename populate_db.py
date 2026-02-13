@@ -10,10 +10,10 @@ from supabase import create_client
 
 # --- 1. CONFIGURATION ---
 load_dotenv()
-ALPACA_KEY = os.getenv('ALPACA_KEY')
-ALPACA_SECRET = os.getenv('ALPACA_SECRET')
+ALPACA_KEY = os.getenv('APCA_API_KEY_ID')
+ALPACA_SECRET = os.getenv('APCA_API_SECRET_KEY')
 SUPABASE_URL = os.getenv('SUPABASE_URL')
-SUPABASE_KEY = os.getenv('SUPABASE_KEY')
+SUPABASE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
 
 # Initialize Clients
 stock_client = StockHistoricalDataClient(ALPACA_KEY, ALPACA_SECRET)
