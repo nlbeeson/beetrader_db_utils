@@ -26,15 +26,13 @@ def generate_html_report():
         d_rsi, w_rsi = trail.get('d_rsi', 0), trail.get('w_rsi', 0)
         slope, cross = trail.get('macd_ready', False), trail.get('macd_cross', False)
 
-        # Earnings countdown logic
         earn_val = row.get('next_earnings', 'N/A')
         earn_disp = earn_val
         if earn_val and earn_val != 'N/A':
             try:
                 dt = datetime.strptime(earn_val, '%Y-%m-%d').date()
                 days = (dt - datetime.now().date()).days
-                countdown = f"{days}d" if days >= 0 else "Past"
-                earn_disp = f"{dt.strftime('%b %d')} ({countdown})"
+                earn_disp = f"{dt.strftime('%b %d')} ({days}d)"
                 if 0 <= days <= 14:
                     earn_disp = f'<span style="color:#e74c3c;font-weight:bold;">⚠️ {earn_disp}</span>'
             except:
