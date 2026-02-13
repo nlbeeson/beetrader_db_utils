@@ -37,18 +37,18 @@ def run_sidbot_scanner():
     cutoff = (datetime.now() - timedelta(days=21)).isoformat()
     supabase.table("signal_watchlist").delete().lt("last_updated", cutoff).execute()
 
-    # Fetch unique symbols available in 1Day timeframe
+    # Optimized Query: Only fetch symbols from the 1Day timeframe
     active_tickers_resp = supabase.table("market_data").select("symbol").eq("timeframe", "1Day").execute()
     symbols = list(set([item['symbol'] for item in active_tickers_resp.data]))
 
     logger.info(f"🔎 Scanning {len(symbols)} symbols...")
 
     bulk_results = []
-    batch_size = 100
+    batch_size = 50  # Smaller batch for stability with 17M rows
 
     for symbol in symbols:
         try:
-            # Query 100 days of data (Optimized by your new Index)
+            # This query is now indexed!
             daily_data = supabase.table("market_data").select("*").eq("symbol", symbol).eq("timeframe", "1Day").order(
                 "timestamp", desc=True).limit(100).execute()
 
@@ -70,14 +70,14 @@ def run_sidbot_scanner():
             # Directional Entry Logic (RSI Touch)
             direction = 'LONG' if curr_rsi <= 30 else ('SHORT' if curr_rsi >= 70 else None)
 
-            # Fetch existing to check for trailing extreme_price
+            # Fetch existing watchlist entry
             existing = supabase.table("signal_watchlist").select("*").eq("symbol", symbol).execute()
 
             if direction or existing.data:
                 final_dir = direction if direction else existing.data[0]['direction']
                 ext_price = existing.data[0]['extreme_price'] if existing.data else df_daily['close'].iloc[-1]
 
-                # Rule: Update extreme price for stop loss tracking
+                # Update Extreme Price for Stop Loss
                 if final_dir == 'LONG':
                     ext_price = min(df_daily['low'].iloc[-1], ext_price)
                 else:
@@ -90,7 +90,7 @@ def run_sidbot_scanner():
 
                 is_ready = all([rsi_up, w_rsi_up, macd_up])
 
-                # Prepare record for JSONB Bulk Upsert
+                # Prepare for Bulk Upsert
                 bulk_results.append({
                     "symbol": symbol,
                     "direction": final_dir,
@@ -101,22 +101,22 @@ def run_sidbot_scanner():
                     "logic_trail": {
                         "d_rsi": float(curr_rsi),
                         "w_rsi": float(curr_w_rsi),
-                        "macd_slope": "up" if macd_up else "down"
+                        "macd_ready": bool(macd_up)
                     },
                     "last_updated": datetime.now().isoformat()
                 })
 
-                # Flush Batch
                 if len(bulk_results) >= batch_size:
                     supabase.table("signal_watchlist").upsert(bulk_results, on_conflict="symbol,direction").execute()
                     bulk_results = []
 
         except Exception as e:
-            logger.error(f"❌ Error {symbol}: {e}")
+            logger.error(f"❌ Error scanning {symbol}: {e}")
 
-    # Final Flush
+    # Final flush
     if bulk_results:
         supabase.table("signal_watchlist").upsert(bulk_results, on_conflict="symbol,direction").execute()
+        logger.info(f"🏁 Final scan complete. Watchlist updated.")
 
 
 if __name__ == "__main__":
