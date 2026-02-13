@@ -3,12 +3,14 @@ import resend
 import json
 from datetime import datetime
 from dotenv import load_dotenv
-from populate_db import get_clients
+from supabase import create_client
 
 # --- CONFIG ---
 load_dotenv()
 resend.api_key = os.getenv("RESEND_API_KEY")
 EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
 
 def get_tv_url(symbol):
@@ -16,13 +18,26 @@ def get_tv_url(symbol):
     return f"https://www.tradingview.com/chart/?symbol={symbol}"
 
 
+def get_supabase():
+    try:
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            return None
+        return create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception:
+        return None
+
+
 def generate_html_report():
-    clients = get_clients()
-    supabase = clients['supabase_client']
+    supabase = get_supabase()
 
     # 1. Fetch all signals current in the watchlist
-    query = supabase.table("signal_watchlist").select("*").execute()
-    data = query.data
+    data = []
+    if supabase:
+        try:
+            query = supabase.table("signal_watchlist").select("*").execute()
+            data = query.data
+        except Exception:
+            data = []
 
     # Even if empty, we continue to generate the heartbeat for the email
     confirmed_rows = ""
@@ -37,19 +52,22 @@ def generate_html_report():
             trail = row.get('logic_trail', {})
             conf = trail.get('confirmations', {})
 
+            # Align with sidbot_scanner logic_trail: {"d_rsi": ..., "w_rsi": ..., "macd_ready": ...}
+            d_rsi = trail.get('d_rsi', 0)
+            w_rsi = trail.get('w_rsi', 0)
+            macd_ready = trail.get('macd_ready', False)
+
             # Update stats
             if row['is_ready']: ready_count += 1
-            if conf.get('pattern'): pattern_count += 1
-
-            # Determine Pattern Label (Double Top/Bottom)
-            pattern_label = "None"
-            if conf.get('pattern'):
-                pattern_label = "Double Bottom" if direction == "LONG" else "Double Top"
-                pattern_label += f" (Δ{conf.get('pattern_spread', 0):.2f})"
-
-            # Context Icons (Market/Sector)
-            mkt_status = '✅' if conf.get('market') else '❌'
-            sec_status = '✅' if conf.get('sector') else '❌'
+            
+            # Confidence score calculation (since it's not in DB)
+            # Max 3: RSI touch (implied by being in watchlist), Weekly RSI alignment, MACD alignment
+            score = 1 # 1 for being here (RSI touch)
+            if macd_ready: score += 1
+            if row['is_ready']:
+                score = 3
+            elif macd_ready:
+                score = 2
 
             # HTML Table Row Construction
             html_row = f"""
@@ -58,10 +76,10 @@ def generate_html_report():
                         <a href="{get_tv_url(symbol)}" style="color: #2962ff; font-weight: bold; text-decoration: none;">{symbol}</a>
                     </td>
                     <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">{direction}</td>
-                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">${row['extreme_price']:.2f}</td>
-                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center; font-weight: bold;">{row['confidence_score']}/3</td>
-                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center; color: #555;">{pattern_label}</td>
-                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">M:{mkt_status} S:{sec_status}</td>
+                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">${float(row.get('extreme_price', 0) or 0):.2f}</td>
+                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center; font-weight: bold;">{score}/3</td>
+                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center; color: #555;">D:{d_rsi:.1f} W:{w_rsi:.1f}</td>
+                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">{'✅' if macd_ready else '❌'}</td>
                 </tr>
             """
 
@@ -81,7 +99,7 @@ def generate_html_report():
             <h3 style="color: #e74c3c; border-bottom: 2px solid #e74c3c; padding-bottom: 5px;">🔥 CONFIRMED ENTRIES (Hard Rules Met)</h3>
             <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
                 <thead style="background: #f8f9fa;">
-                    <tr><th>Symbol</th><th>Dir</th><th>Stop</th><th>Score</th><th>Pattern</th><th>Context</th></tr>
+                    <tr><th>Symbol</th><th>Dir</th><th>Stop</th><th>Score</th><th>RSI (D/W)</th><th>MACD</th></tr>
                 </thead>
                 <tbody>{confirmed_rows if confirmed_rows else '<tr><td colspan="6" style="text-align:center; padding:20px;">No momentum matches in current cycle.</td></tr>'}</tbody>
             </table>
@@ -89,7 +107,7 @@ def generate_html_report():
             <h3 style="color: #3498db; border-bottom: 2px solid #3498db; padding-bottom: 5px;">⏳ WATCHLIST (Waiting Room)</h3>
             <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
                 <thead style="background: #f8f9fa;">
-                    <tr><th>Symbol</th><th>Dir</th><th>Stop</th><th>Score</th><th>Pattern</th><th>Context</th></tr>
+                    <tr><th>Symbol</th><th>Dir</th><th>Stop</th><th>Score</th><th>RSI (D/W)</th><th>MACD</th></tr>
                 </thead>
                 <tbody>{potential_rows if potential_rows else '<tr><td colspan="6" style="text-align:center; padding:20px;">No tickers currently at RSI extremes.</td></tr>'}</tbody>
             </table>
