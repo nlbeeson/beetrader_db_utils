@@ -26,18 +26,6 @@ def get_clients():
     }
 
 
-def get_tickers_from_ishares_xml(file_path):
-    import pandas as pd
-    try:
-        # Added engine='openpyxl' for Linux compatibility
-        df = pd.read_excel(file_path, sheet_name='Holdings', skiprows=9, engine='openpyxl')
-        tickers = df['Ticker'].dropna().unique().tolist()
-        return [str(t).strip() for t in tickers if len(str(t)) <= 5]
-    except Exception as e:
-        logger.error(f"Error parsing iShares XML: {e}")
-        return []
-
-
 def get_additional_tickers(file_path):
     """Scans a secondary file (CSV or TXT) for additional custom tickers."""
     if not os.path.exists(file_path):
@@ -57,16 +45,35 @@ def get_additional_tickers(file_path):
         return []
 
 
+def get_tickers_from_ishares_xml(file_path):
+    import pandas as pd
+    try:
+        # Using read_html is a known trick for these specific iShares 'XML' files
+        # which are actually just HTML/XML tables labeled as .xml
+        dfs = pd.read_html(file_path)
+        # Usually the 10th table or the one with 'Ticker' in it
+        for df in dfs:
+            if 'Ticker' in df.columns:
+                tickers = df['Ticker'].dropna().unique().tolist()
+                return [str(t).strip() for t in tickers if len(str(t)) <= 5]
+        return []
+    except Exception as e:
+        logger.error(f"Error parsing iShares XML: {e}")
+        return []
+
+
 def sync_ticker_metadata(symbols):
-    """Simplified sync to match your existing Supabase schema"""
+    """Stripped to the absolute minimum to match your Supabase schema"""
     supabase = get_clients()['supabase_client']
-    # Removed asset_class to avoid the PGRST204 error
-    records = [{"symbol": s, "source": "combined_import"} for s in symbols]
+    # Only sending 'symbol' to avoid schema cache errors
+    records = [{"symbol": s} for s in symbols]
 
     logger.info(f"🔄 Syncing {len(symbols)} symbols to metadata...")
     if records:
-        supabase.table("ticker_metadata").upsert(records, on_conflict="symbol").execute()
-
+        try:
+            supabase.table("ticker_metadata").upsert(records, on_conflict="symbol").execute()
+        except Exception as e:
+            logger.error(f"❌ Metadata sync failed: {e}")
 
 def populate_market_data():
     clients = get_clients()
