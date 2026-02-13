@@ -14,7 +14,6 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 def get_tv_url(symbol):
     return f"https://www.tradingview.com/chart/?symbol={symbol}"
 
-
 def generate_html_report():
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     data = supabase.table("signal_watchlist").select("*").execute().data
@@ -22,9 +21,13 @@ def generate_html_report():
 
     for row in data:
         symbol, direction = row['symbol'], row['direction']
-        trail = row.get('logic_trail', {})
+
+        # SAFETY CHECK: If logic_trail is NULL, use an empty dictionary
+        trail = row.get('logic_trail') or {}
+
         d_rsi, w_rsi = trail.get('d_rsi', 0), trail.get('w_rsi', 0)
         slope, cross = trail.get('macd_ready', False), trail.get('macd_cross', False)
+
 
         earn_val = row.get('next_earnings', 'N/A')
         earn_disp = earn_val
