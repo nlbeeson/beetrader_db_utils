@@ -24,45 +24,43 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- 2. TICKER UNIVERSE ---
 def get_ticker_universe():
-    iwv_url = "https://www.ishares.com/us/products/239714/ishares-russell-3000-etf/1467271812596.ajax?fileType=csv&fileName=IWV_holdings&dataType=fund"
+    url = "https://www.ishares.com/us/products/239714/ishares-russell-3000-etf/1467271812596.ajax?fileType=csv&fileName=IWV_holdings&dataType=fund"
     headers = {'User-Agent': 'Mozilla/5.0'}
 
     try:
-        res = requests.get(iwv_url, headers=headers)
-        # 1. Clean the raw text and split into lines
-        lines = res.text.strip().splitlines()
+        res = requests.get(url, headers=headers)
+        # Force the exact slice that worked in your manual check
+        lines = res.text.splitlines()
+        csv_data = "\n".join(lines[9:])
 
-        # 2. Find exactly which line contains 'Ticker' (usually index 9)
-        start_idx = 0
-        for i, line in enumerate(lines):
-            if 'Ticker' in line:
-                start_idx = i
-                break
+        # Read with the most basic settings
+        df = pd.read_csv(io.StringIO(csv_data))
 
-        # 3. Load from that line forward
-        df = pd.read_csv(io.StringIO('\n'.join(lines[start_idx:])))
+        # Clean the column names of any hidden characters
+        df.columns = [str(c).strip() for c in df.columns]
 
-        # 4. Aggressively clean column names (remove quotes, spaces, BOMs)
-        df.columns = [c.strip().replace('"', '') for c in df.columns]
-
-        # 5. Extract tickers
+        # Extract and validate
         equities = [str(t).strip() for t in df['Ticker'].dropna().unique()
                     if len(str(t)) <= 5 and str(t).isalpha()]
 
-        print(f"✅ Scraped {len(equities)} equities from Russell 3000.")
+        if len(equities) < 100:
+            raise ValueError(f"Too few tickers found: {len(equities)}")
+
+        print(f"✅ Success! Scraped {len(equities)} Russell 3000 tickers.")
 
     except Exception as e:
-        print(f"⚠️ Russell 3000 scrape failed ({e}). Using fallback list.")
-        equities = ['AAPL', 'MSFT', 'TSLA', 'AMZN', 'GOOGL']
+        print(f"⚠️ Russell 3000 scrape failed: {e}")
+        # Last resort: If even this fails, let's at least get the top 50
+        equities = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'BRK.B', 'V', 'UNH']
 
-    # Standard Forex and Crypto lists
     forex = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'AUD/USD', 'USD/CAD', 'USD/CHF', 'NZD/USD',
              'EUR/JPY', 'GBP/JPY', 'GBP/NZD', 'EUR/NZD', 'CHF/JPY', 'GBP/AUD', 'GBP/CAD',
              'GBP/CHF', 'NZD/JPY', 'EUR/CAD', 'CAD/JPY', 'AUD/NZD', 'AUD/JPY', 'NZD/CHF',
              'EUR/AUD', 'AUD/CAD', 'NZD/CAD', 'EUR/CHF', 'AUD/CHF', 'CAD/CHF']
-    crypto = ['BTC/USD', 'ETH/USD']
 
+    crypto = ['BTC/USD', 'ETH/USD']
     return {"EQUITY": equities, "FOREX": forex, "CRYPTO": crypto}
+
 # --- 3. CORE FETCHER ---
 def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_class):
     start_date = datetime.now() - timedelta(days=days_back)
