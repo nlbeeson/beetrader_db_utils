@@ -58,6 +58,11 @@ def run_sidbot_scanner():
                 .eq("symbol", symbol).eq("timeframe", "1Day") \
                 .order("timestamp", desc=True).limit(250).execute()
 
+            # SKIP SYMBOLS WITH INSUFFICIENT HISTORY
+            if len(daily_data.data) < 100:
+                logger.warning(f"⚠️ Skipping {symbol}: Insufficient history ({len(daily_data.data)} bars).")
+                continue
+
             if len(daily_data.data) < 50: continue
             df_daily = pd.DataFrame(daily_data.data).iloc[::-1]
 
