@@ -179,6 +179,20 @@ def run_sidbot_scanner():
             existing = supabase.table("signal_watchlist").select("*").eq("symbol", symbol).execute()
 
             if direction or existing.data:
+                # Calculate the Market Context Score (Confirmations)
+                context_score = calculate_market_context_score(symbol, final_dir, supabase)
+
+                # Update the database with the score
+                supabase.table("signal_watchlist").upsert({
+                    "symbol": symbol,
+                    "direction": final_dir,
+                    "rsi_touch_value": float(curr_rsi),
+                    "extreme_price": float(ext_price),
+                    "atr": float(atr_val),
+                    "is_ready": is_ready,
+                    "confidence_score": context_score,  # <--- NEW: Stores 0, 1, or 2
+                    "last_updated": datetime.now().isoformat()
+                }, on_conflict="symbol,direction").execute()
                 # Resolve direction (favor new touch, else keep existing)
                 final_dir = direction if direction else existing.data[0]['direction']
 
