@@ -52,12 +52,19 @@ def run_sidbot_scanner():
 
     for symbol in all_symbols:
         try:
+            # Increased limit to 250 for RSI accuracy (1 year of daily bars)
             daily_data = supabase.table("market_data").select("*") \
                 .eq("symbol", symbol).eq("timeframe", "1Day") \
-                .order("timestamp", desc=True).limit(100).execute()
+                .order("timestamp", desc=True).limit(250).execute()
 
-            if len(daily_data.data) < 26: continue
+            if len(daily_data.data) < 50:
+                continue  # Need enough data for stable indicators
+            
             df_daily = pd.DataFrame(daily_data.data).iloc[::-1]
+
+            # Ensure numeric types for indicators
+            for col in ['open', 'high', 'low', 'close']:
+                df_daily[col] = pd.to_numeric(df_daily[col], errors='coerce')
 
             # Indicators
             rsi_ser = RSIIndicator(close=df_daily['close']).rsi()
@@ -69,7 +76,8 @@ def run_sidbot_scanner():
             curr_rsi, prev_rsi = rsi_ser.iloc[-1], rsi_ser.iloc[-2]
             curr_macd, prev_macd, curr_sig = macd_line.iloc[-1], macd_line.iloc[-2], signal_line.iloc[-1]
             curr_w_rsi, prev_w_rsi = get_weekly_rsi_resampled(df_daily)
-            if curr_w_rsi is None: continue
+            if curr_w_rsi is None:
+                continue
 
             # Direction persistence
             direction = 'LONG' if curr_rsi <= 30 else ('SHORT' if curr_rsi >= 70 else None)
@@ -90,43 +98,57 @@ def run_sidbot_scanner():
                 earnings_safe = True
                 if report_date_str:
                     days_to = (datetime.strptime(report_date_str, '%Y-%m-%d').date() - datetime.now().date()).days
-                    if 0 <= days_to <= 14: earnings_safe = False
+                    if 0 <= days_to <= 14:
+                        earnings_safe = False
 
                 # Corrected Momentum Alignment
                 if direction == 'LONG':
-                    rsi_align, w_rsi_align, macd_align = (curr_rsi > prev_rsi), (curr_w_rsi > prev_w_rsi), (
-                                curr_macd > prev_macd)
+                    rsi_align = (curr_rsi > prev_rsi)
+                    w_rsi_align = (curr_w_rsi > prev_w_rsi)
+                    macd_align = (curr_macd > prev_macd)
                 else:  # SHORT
-                    rsi_align, w_rsi_align, macd_align = (curr_rsi < prev_rsi), (curr_w_rsi < prev_w_rsi), (
-                                curr_macd < prev_macd)
+                    rsi_align = (curr_rsi < prev_rsi)
+                    w_rsi_align = (curr_w_rsi < prev_w_rsi)
+                    macd_align = (curr_macd < prev_macd)
 
                 is_ready = all([rsi_align, w_rsi_align, macd_align, earnings_safe])
                 macd_cross = curr_macd > curr_sig if direction == 'LONG' else curr_macd < curr_sig
 
                 bulk_results.append({
-                    "symbol": symbol, "direction": direction, "rsi_touch_value": float(curr_rsi),
-                    "extreme_price": float(ext_price), "atr": float(atr_val), "is_ready": is_ready,
+                    "symbol": symbol,
+                    "direction": direction,
+                    "rsi_touch_value": float(curr_rsi),
+                    "extreme_price": float(ext_price),
+                    "atr": float(atr_val),
+                    "is_ready": is_ready,
                     "next_earnings": report_date_str,
                     "logic_trail": {
-                        "d_rsi": float(curr_rsi), "w_rsi": float(curr_w_rsi),
-                        "macd_ready": bool(macd_align), "macd_cross": bool(macd_cross)
+                        "d_rsi": float(curr_rsi),
+                        "w_rsi": float(curr_w_rsi),
+                        "macd_ready": bool(macd_align),
+                        "macd_cross": bool(macd_cross)
                     },
                     "last_updated": datetime.now().isoformat()
                 })
 
                 if len(bulk_results) >= 100:
                     try:
-                        supabase.table("signal_watchlist").upsert(bulk_results,
-                                                                  on_conflict="symbol,direction").execute()
+                        supabase.table("signal_watchlist").upsert(bulk_results, on_conflict="symbol").execute()
                         bulk_results = []
+                        logger.info(f"✅ Synced batch to Supabase")
                     except Exception as e:
-                        logger.error(f"❌ Batch fail: {e}")
+                        logger.error(f"❌ Batch upsert failed: {e}")
+
+        except Exception as e:
+            logger.error(f"❌ Error processing {symbol}: {e}")
 
     if bulk_results:
         try:
-            supabase.table("signal_watchlist").upsert(bulk_results, on_conflict="symbol,direction").execute()
+            supabase.table("signal_watchlist").upsert(bulk_results, on_conflict="symbol").execute()
+            logger.info(f"✅ Final batch synced.")
         except Exception as e:
-            logger.error(f"❌ Final fail: {e}")
+            logger.error(f"❌ Final upsert failed: {e}")
+    
     logger.info("🏁 Scanner complete.")
 
 
