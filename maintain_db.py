@@ -1,28 +1,27 @@
 import supabase
 
-def purge_old_data():
-    # Define your retention policies
+def purge_rotating_data():
+    # Retention Policy:
+    # 15Min: 180 Days (Execution context)
+    # 1Hour: 1 Year (Intraday trend)
+    # 4Hour: 2 Years (Swing trend - Keep this for your prop firm strategies)
+    # Daily: Forever (Backtesting & Portfolio tracking)
+
     queries = [
-        # 1. Purge 15m older than 180 days
         "DELETE FROM market_data WHERE timeframe = '15Min' AND timestamp < NOW() - INTERVAL '180 days';",
-
-        # 2. Purge 1h older than 1 year
         "DELETE FROM market_data WHERE timeframe = '1Hour' AND timestamp < NOW() - INTERVAL '1 year';",
-
-        # 3. Purge 4h older than 2 years (Optional - can be adjusted)
         "DELETE FROM market_data WHERE timeframe = '4Hour' AND timestamp < NOW() - INTERVAL '2 years';",
-
-        # 4. Reclaim physical space (Vacuum)
-        "VACUUM market_data;"
+        "VACUUM market_data;"  # Reclaims physical disk space
     ]
 
     for q in queries:
         try:
-            supabase.rpc("run_sql", {"sql_query": q}).execute()
-            print(f"✅ Maintenance Task Complete: {q[:30]}...")
+            # You'll need to enable a 'run_sql' RPC in Supabase or use a direct Postgres connection
+            supabase.postgrest.rpc("run_sql_maintenance", {"query": q}).execute()
+            print(f"✅ Executed: {q[:40]}...")
         except Exception as e:
-            print(f"⚠️ SQL Task Failed: {e}")
+            print(f"⚠️ Purge failed: {e}")
 
 
 if __name__ == "__main__":
-    purge_old_data()
+    purge_rotating_data()
