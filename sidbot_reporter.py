@@ -116,4 +116,53 @@ def generate_html_report():
                 <thead style="background: #f8f9fa;">
                     <tr><th>Symbol</th><th>Dir</th><th>Stop</th><th>Score</th><th>RSI (D/W)</th><th>MACD</th><th>Earnings</th></tr>
                 </thead>
-                <tbody>{confirmed_rows if confirmed_rows else
+                <tbody>{confirmed_rows if confirmed_rows else '<tr><td colspan="7" style="text-align:center; padding:20px;">No momentum matches in current cycle.</td></tr>'}</tbody>
+            </table>
+
+            <h3 style="color: #3498db; border-bottom: 2px solid #3498db; padding-bottom: 5px;">⏳ WATCHLIST (Waiting Room)</h3>
+            <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
+                <thead style="background: #f8f9fa;">
+                    <tr><th>Symbol</th><th>Dir</th><th>Stop</th><th>Score</th><th>RSI (D/W)</th><th>MACD</th><th>Earnings</th></tr>
+                </thead>
+                <tbody>{potential_rows if potential_rows else '<tr><td colspan="7" style="text-align:center; padding:20px;">No tickers currently at RSI extremes.</td></tr>'}</tbody>
+            </table>
+
+            <div style="margin-top: 30px; padding: 15px; background: #f1f5f9; border-radius: 8px; border-left: 5px solid #3182ce;">
+                <strong style="color: #2c5282;">Scanner Heartbeat:</strong><br>
+                <span style="font-size: 14px; color: #2d3748;">
+                    Watchlist Size: {len(data) if data else 0} | 
+                    Ready for Entry: {ready_count} | 
+                    Chart Patterns Found: {pattern_count}
+                </span>
+            </div>
+
+            <div style="margin-top: 40px; padding: 20px; background-color: #fff5f5; border: 1px solid #feb2b2; border-radius: 8px;">
+                <p style="font-size: 13px; color: #c53030; margin: 0; font-weight: bold;">⚠️ Risk Disclosure & Disclaimer</p>
+                <p style="font-size: 12px; color: #742a2a; margin-top: 8px; line-height: 1.4;">
+                    BeeTrader SidBot v1.0 | Mint Desktop | System Time: {datetime.now().strftime('%H:%M:%S')}
+                </p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return ready_count, pattern_count, html_content
+
+
+def send_report():
+    ready, patterns, html_body = generate_html_report()
+
+    try:
+        resend.Emails.send({
+            "from": "SidBot Advisor <advisor@notifications.natebeeson.com>",
+            "to": [EMAIL_RECEIVER],
+            "subject": f"SidBot: {ready} Ready | {patterns} Patterns Found",
+            "html": html_body
+        })
+        print("✅ HTML Intelligence Report sent successfully.")
+    except Exception as e:
+        print(f"❌ Error sending report: {e}")
+
+
+if __name__ == "__main__":
+    send_report()
