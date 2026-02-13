@@ -115,7 +115,7 @@ def send_report():
     total, ready, patterns, html_body = generate_html_report()
     try:
         resend.Emails.send({
-            "from": "SidBot Intelligence <onboarding@resend.dev>",
+            "from": "SidBot Advisor <advisor@notifications.natebeeson.com>",
             "to": [EMAIL_RECEIVER],
             "subject": f"SidBot Report: {ready} Ready | {patterns} Patterns Detected",
             "html": html_body
