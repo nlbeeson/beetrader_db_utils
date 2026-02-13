@@ -1,4 +1,5 @@
 import time
+import logging
 import pandas as pd
 import os
 import glob
@@ -9,6 +10,17 @@ from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDa
 from alpaca.data.requests import StockBarsRequest, CryptoBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from supabase import create_client
+
+# --- 0. LOGGING SETUP ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler("beetrader_db.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # --- 1. CONFIGURATION ---
 def get_clients():
@@ -27,17 +39,17 @@ def get_clients():
 # --- 2. TICKER UNIVERSE ---
 
 def get_ticker_universe():
-    print("📂 Scanning for latest iShares import...")
+    logger.info("📂 Scanning for latest iShares import...")
     equities = []
 
     # 1. Automatically find the most recent XML file in your folder
     import_files = glob.glob('ticker_imports/*.xml')
     if not import_files:
-        print("⚠️ No XML file found in ticker_imports/. Using fallback.")
+        logger.warning("⚠️ No XML file found in ticker_imports/. Using fallback.")
         return {"EQUITY": ['AAPL', 'MSFT', 'TSLA'], "FOREX": [], "CRYPTO": []}
 
     latest_file = max(import_files, key=os.path.getctime)
-    print(f"📄 Processing: {latest_file}")
+    logger.info(f"📄 Processing: {latest_file}")
 
     try:
         tree = ET.parse(latest_file)
@@ -56,9 +68,9 @@ def get_ticker_universe():
                 if len(t) <= 5 and t.isalpha() and t != 'Ticker':
                     equities.append(t)
 
-        print(f"✅ Extracted {len(equities)} tickers from iShares XML.")
+        logger.info(f"✅ Extracted {len(equities)} tickers from iShares XML.")
     except Exception as e:
-        print(f"❌ Failed to parse XML: {e}")
+        logger.error(f"❌ Failed to parse XML: {e}")
 
     # Deduplicate and return
     return {
@@ -78,7 +90,6 @@ def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_clas
     is_alt = asset_class in ['FOREX', 'CRYPTO']
     client = crypto_client if is_alt else stock_client
 
-    # Process in batches of 50 to respect API limits
     for i in range(0, len(symbols), 50):
         batch = symbols[i:i + 50]
         try:
@@ -86,6 +97,7 @@ def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_clas
                 req = CryptoBarsRequest(symbol_or_symbols=batch, timeframe=timeframe_obj, start=start_date)
                 bars = client.get_crypto_bars(req)
             else:
+                # Add price filtering for equities
                 req = StockBarsRequest(symbol_or_symbols=batch, timeframe=timeframe_obj, start=start_date,
                                        adjustment='all')
                 bars = client.get_stock_bars(req)
@@ -93,6 +105,13 @@ def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_clas
             records = []
             if bars.data:
                 for symbol, bar_list in bars.data.items():
+                    # FILTER: Check the most recent close price in the batch
+                    # This ensures only stocks > $5 enter your DB
+                    if not is_alt and bar_list:
+                        latest_price = bar_list[-1].close
+                        if latest_price < 5.00:
+                            continue  # Skip penny stocks
+
                     for b in bar_list:
                         records.append({
                             "symbol": symbol.replace('/', ''),
@@ -104,18 +123,16 @@ def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_clas
                         })
 
             if records:
-                # Chunk the upload to Supabase (1000 rows at a time)
                 for j in range(0, len(records), 1000):
                     supabase.table("market_data").upsert(
                         records[j:j + 1000],
                         on_conflict="symbol,timestamp,timeframe"
                     ).execute()
-                print(f"✅ {asset_class} | {timeframe_label} | Batch {i // 50 + 1} ({batch[0]}...) uploaded.")
+                logger.info(f"✅ {asset_class} | {timeframe_label} | Batch {i // 50 + 1} processed.")
 
-            time.sleep(0.5)  # Rate limit safety
+            time.sleep(0.5)
         except Exception as e:
-            print(f"❌ Error on {asset_class} batch starting with {batch[0]}: {e}")
-
+            logger.error(f"❌ Error on {asset_class} batch starting with {batch[0]}: {e}")
 
 # --- 4. EXECUTION ---
 if __name__ == "__main__":

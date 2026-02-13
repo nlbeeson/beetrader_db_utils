@@ -1,5 +1,9 @@
+import logging
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from populate_db import get_ticker_universe, populate_lane, get_clients
+
+# --- 0. LOGGING SETUP ---
+logger = logging.getLogger(__name__)
 
 def run_daily_update():
     # Initialize clients using the shared helper

@@ -1,6 +1,10 @@
 import os
+import logging
 from dotenv import load_dotenv
 from supabase import create_client
+
+# --- 0. LOGGING SETUP ---
+logger = logging.getLogger(__name__)
 
 def purge_rotating_data():
     # Load configuration
@@ -9,7 +13,7 @@ def purge_rotating_data():
     SUPABASE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
     
     if not SUPABASE_URL or not SUPABASE_KEY:
-        print("❌ Supabase credentials not found in .env")
+        logger.error("❌ Supabase credentials not found in .env")
         return
 
     # Initialize Client
@@ -37,9 +41,9 @@ def purge_rotating_data():
             # Warning: Allowing raw SQL execution via RPC is a security risk. 
             # Prefer specific RPCs for specific tasks if possible.
             supabase.rpc("run_sql_maintenance", {"query": q}).execute()
-            print(f"✅ Executed: {q[:40]}...")
+            logger.info(f"✅ Executed: {q[:40]}...")
         except Exception as e:
-            print(f"⚠️ Task failed: {e}")
+            logger.warning(f"⚠️ Task failed: {e}")
 
 
 if __name__ == "__main__":
