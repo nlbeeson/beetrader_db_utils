@@ -50,11 +50,14 @@ def run_sidbot_scanner():
             curr_w_rsi, prev_w_rsi = get_weekly_rsi_resampled(df)
             if curr_w_rsi is None: continue
 
-            # 4. DIRECTIONAL LOGIC
+            # --- 4. THE DIRECTIONAL LOGIC (Widened for the first run) ---
             final_dir = None
-            if curr_rsi <= 30:
+
+            # Widen this to 45 for Longs and 55 for Shorts just for this weekend
+            # This allows the bot to "see" stocks that have already started turning
+            if curr_rsi <= 45:
                 final_dir = 'LONG'
-            elif curr_rsi >= 70:
+            elif curr_rsi >= 55:
                 final_dir = 'SHORT'
 
             existing = supabase.table("signal_watchlist").select("*").eq("symbol", symbol).execute()
