@@ -83,21 +83,29 @@ def generate_html_report():
             elif macd_ready:
                 score = 2
 
-            # HTML Table Row Construction (Added Earnings Column)
-            html_row = f"""
-                <tr>
-                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">
-                        <a href="{get_tv_url(symbol)}" style="color: #2962ff; font-weight: bold; text-decoration: none;">{symbol}</a>
-                    </td>
-                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">{direction}</td>
-                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">${float(row.get('extreme_price', 0) or 0):.2f}</td>
-                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center; font-weight: bold;">{score}/3</td>
-                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center; color: #555;">D:{d_rsi:.1f} W:{w_rsi:.1f}</td>
-                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">{'✅' if macd_ready else '❌'}</td>
-                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center; font-size: 13px;">{earnings_display}</td>
-                </tr>
-            """
+            # Inside generate_html_report() loop
+            for row in data:
+                symbol = row['symbol']
+                direction = row['direction']
 
+                # Visual cues for Direction
+                dir_color = "#27ae60" if direction == "LONG" else "#e74c3c"
+                dir_badge = f'<span style="background-color: {dir_color}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px;">{direction}</span>'
+
+                # Construction of the row
+                html_row = f"""
+                    <tr>
+                        <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">
+                            <a href="{get_tv_url(symbol)}" style="color: #2962ff; font-weight: bold; text-decoration: none;">{symbol}</a>
+                        </td>
+                        <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">{dir_badge}</td>
+                        <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">${float(row.get('extreme_price', 0) or 0):.2f}</td>
+                        <td style="padding: 10px; border: 1px solid #ddd; text-align: center; font-weight: bold;">{score}/3</td>
+                        <td style="padding: 10px; border: 1px solid #ddd; text-align: center; color: #555;">D:{d_rsi:.1f} W:{w_rsi:.1f}</td>
+                        <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">{'✅' if macd_ready else '❌'}</td>
+                        <td style="padding: 10px; border: 1px solid #ddd; text-align: center; font-size: 13px;">{earnings_display}</td>
+                    </tr>
+                """
             if row['is_ready']:
                 confirmed_rows += html_row
             else:
