@@ -2,7 +2,8 @@ import os
 import logging
 import pandas as pd
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from lxml import etree
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from alpaca.data.historical import StockHistoricalDataClient
@@ -27,6 +28,64 @@ def get_clients():
     }
 
 
+def get_ticker_universe(supabase=None):
+    """Returns a dict of symbols by asset class. Currently focused on US_EQUITY."""
+    if not supabase:
+        supabase = get_clients()['supabase_client']
+    
+    resp = supabase.table("ticker_metadata").select("symbol").execute()
+    symbols = [item['symbol'] for item in resp.data]
+    return {"US_EQUITY": symbols}
+
+
+def populate_lane(symbols, timeframe, label, days_back, asset_class, clients=None):
+    """Generic function to populate a specific timeframe for a list of symbols."""
+    if not clients:
+        clients = get_clients()
+    
+    supabase = clients['supabase_client']
+    alpaca = clients['alpaca_client']
+    
+    start_date = datetime.now() - timedelta(days=days_back)
+    
+    for i in range(0, len(symbols), 50):
+        batch = symbols[i:i + 50]
+        request_params = StockBarsRequest(
+            symbol_or_symbols=batch,
+            timeframe=timeframe,
+            start=start_date,
+            adjustment='all'
+        )
+        
+        try:
+            bars = alpaca.get_stock_bars(request_params)
+            if bars.df.empty:
+                continue
+                
+            df = bars.df.reset_index()
+            
+            # Vectorized formatting
+            df['timestamp'] = df['timestamp'].apply(lambda x: x.isoformat())
+            df['timeframe'] = label
+            df['asset_class'] = asset_class
+            df['source'] = "alpaca"
+            
+            # Map columns and convert to list of dicts
+            records = df[[
+                'symbol', 'timestamp', 'open', 'high', 'low', 'close', 'volume', 
+                'timeframe', 'asset_class', 'source'
+            ]].to_dict('records')
+
+            if records:
+                supabase.table("market_data").upsert(
+                    records, 
+                    on_conflict="symbol,timestamp,timeframe"
+                ).execute()
+                
+        except Exception as e:
+            logger.error(f"❌ Error in lane {label} for batch {i}: {e}")
+
+
 def sync_sector_metadata(supabase):
     """Parses Russell 2000 XML and syncs unique sectors to ticker_metadata."""
     logger.info("📂 Scanning for latest iShares import...")
@@ -37,16 +96,26 @@ def sync_sector_metadata(supabase):
         return
 
     try:
-        tree = ET.parse(xml_path)
+        # Using lxml for better namespace handling
+        parser = etree.XMLParser(recover=True)
+        tree = etree.parse(xml_path, parser)
         root = tree.getroot()
 
+        # Handle potential namespaces
+        ns = root.nsmap
+        
         raw_metadata = []
-        # Adjusted for standard iShares XML structure
-        for row in root.findall('.//Table'):
-            symbol = row.find('Ticker').text if row.find('Ticker') is not None else None
-            sector = row.find('Sector').text if row.find('Sector') is not None else "Unknown"
+        # Support both namespaced and non-namespaced structures
+        xpath_query = './/Table' if not ns else './/{*}Table'
+        
+        for row in root.findall(xpath_query):
+            ticker_node = row.find('Ticker') if not ns else row.find('.//{*}Ticker')
+            sector_node = row.find('Sector') if not ns else row.find('.//{*}Sector')
+            
+            symbol = ticker_node.text if ticker_node is not None else None
+            sector = sector_node.text if sector_node is not None else "Unknown"
 
-            if symbol and len(symbol) <= 5:  # Filter out weird non-stock entries
+            if symbol and len(symbol) <= 5:
                 raw_metadata.append({"symbol": symbol, "sector": sector})
 
         # DEDUPLICATION: Fixes ERROR 21000
@@ -79,18 +148,25 @@ def populate_market_data():
     symbols = [t['symbol'] for t in tickers_resp.data]
 
     # 3. Timeframes to populate
-    # We focus on Day first, then move to lower timeframes
-    timeframes = [TimeFrame.Day, TimeFrame.Hour]
+    # Map TimeFrame objects to the labels used in our DB and scanner
+    tf_configs = [
+        {"tf": TimeFrame.Day, "label": "1Day", "years": 3},
+        {"tf": TimeFrame.Hour, "label": "1Hour", "years": 2}
+    ]
 
-    for tf in timeframes:
-        logger.info(f"🚀 Populating {tf} data...")
-        # Alpaca allows batching symbols to reduce API calls
+    for config in tf_configs:
+        tf = config["tf"]
+        label = config["label"]
+        logger.info(f"🚀 Populating {label} data...")
+        
+        start_date = datetime.now() - timedelta(days=config["years"] * 365)
+        
         for i in range(0, len(symbols), 50):
             batch = symbols[i:i + 50]
             request_params = StockBarsRequest(
                 symbol_or_symbols=batch,
                 timeframe=tf,
-                start=datetime(2023, 1, 1),  # ~3 years of history
+                start=start_date,
                 adjustment='all'
             )
 
@@ -99,20 +175,16 @@ def populate_market_data():
                 if not bars.df.empty:
                     df = bars.df.reset_index()
 
-                    records = []
-                    for _, row in df.iterrows():
-                        records.append({
-                            "symbol": row['symbol'],
-                            "timestamp": row['timestamp'].isoformat(),
-                            "open": float(row['open']),
-                            "high": float(row['high']),
-                            "low": float(row['low']),
-                            "close": float(row['close']),
-                            "volume": int(row['volume']),
-                            "timeframe": str(tf),
-                            "asset_class": "US_EQUITY",
-                            "source": "alpaca"
-                        })
+                    # Vectorized formatting
+                    df['timestamp'] = df['timestamp'].apply(lambda x: x.isoformat())
+                    df['timeframe'] = label
+                    df['asset_class'] = "US_EQUITY"
+                    df['source'] = "alpaca"
+                    
+                    records = df[[
+                        'symbol', 'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                        'timeframe', 'asset_class', 'source'
+                    ]].to_dict('records')
 
                     # Push to Supabase
                     if records:

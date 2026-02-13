@@ -41,6 +41,10 @@ def run_sidbot_scanner():
     active_tickers_resp = supabase.table("market_data").select("symbol").eq("timeframe", "1Day").execute()
     symbols = list(set([item['symbol'] for item in active_tickers_resp.data]))
 
+    # Fetch entire existing watchlist to avoid O(N) queries in the loop
+    watchlist_resp = supabase.table("signal_watchlist").select("*").execute()
+    watchlist = {item['symbol']: item for item in watchlist_resp.data}
+
     logger.info(f"🔎 Scanning {len(symbols)} symbols...")
 
     bulk_results = []
@@ -48,12 +52,16 @@ def run_sidbot_scanner():
 
     for symbol in symbols:
         try:
-            # This query is now indexed!
+            # Increased limit to 250 for RSI accuracy (1 year of daily bars)
             daily_data = supabase.table("market_data").select("*").eq("symbol", symbol).eq("timeframe", "1Day").order(
-                "timestamp", desc=True).limit(100).execute()
+                "timestamp", desc=True).limit(250).execute()
 
-            if len(daily_data.data) < 26: continue
+            if len(daily_data.data) < 50: continue  # Need enough data for stable indicators
             df_daily = pd.DataFrame(daily_data.data).iloc[::-1]
+            
+            # Ensure numeric types for indicators
+            for col in ['open', 'high', 'low', 'close']:
+                df_daily[col] = pd.to_numeric(df_daily[col], errors='coerce')
 
             # Indicators
             rsi_ser = RSIIndicator(close=df_daily['close']).rsi()
@@ -70,12 +78,12 @@ def run_sidbot_scanner():
             # Directional Entry Logic (RSI Touch)
             direction = 'LONG' if curr_rsi <= 30 else ('SHORT' if curr_rsi >= 70 else None)
 
-            # Fetch existing watchlist entry
-            existing = supabase.table("signal_watchlist").select("*").eq("symbol", symbol).execute()
+            # Check existing watchlist entry from memory
+            existing_entry = watchlist.get(symbol)
 
-            if direction or existing.data:
-                final_dir = direction if direction else existing.data[0]['direction']
-                ext_price = existing.data[0]['extreme_price'] if existing.data else df_daily['close'].iloc[-1]
+            if direction or existing_entry:
+                final_dir = direction if direction else existing_entry['direction']
+                ext_price = existing_entry['extreme_price'] if existing_entry else df_daily['close'].iloc[-1]
 
                 # Update Extreme Price for Stop Loss
                 if final_dir == 'LONG':
