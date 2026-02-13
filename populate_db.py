@@ -48,32 +48,35 @@ def get_additional_tickers(file_path):
 def get_tickers_from_ishares_xml(file_path):
     import pandas as pd
     try:
-        # Using read_html is a known trick for these specific iShares 'XML' files
-        # which are actually just HTML/XML tables labeled as .xml
+        # Trick: Many iShares 'XML' files are actually HTML tables.
+        # This will attempt to read the 'Holdings' table directly.
         dfs = pd.read_html(file_path)
-        # Usually the 10th table or the one with 'Ticker' in it
         for df in dfs:
             if 'Ticker' in df.columns:
-                tickers = df['Ticker'].dropna().unique().tolist()
-                return [str(t).strip() for t in tickers if len(str(t)) <= 5]
+                return df['Ticker'].dropna().unique().tolist()
         return []
     except Exception as e:
         logger.error(f"Error parsing iShares XML: {e}")
+        # If HTML fails, try a standard CSV read as a fallback
+        try:
+            df = pd.read_csv(file_path, skiprows=9)
+            if 'Ticker' in df.columns:
+                return df['Ticker'].dropna().unique().tolist()
+        except:
+            pass
         return []
 
 
 def sync_ticker_metadata(symbols):
-    """Stripped to the absolute minimum to match your Supabase schema"""
+    """Cleaned metadata sync to match your existing Supabase schema"""
     supabase = get_clients()['supabase_client']
-    # Only sending 'symbol' to avoid schema cache errors
-    records = [{"symbol": s} for s in symbols]
+    # Removed 'source' and 'asset_class' since they caused errors
+    records = [{"symbol": str(s).strip()} for s in symbols if len(str(s)) <= 5]
 
-    logger.info(f"🔄 Syncing {len(symbols)} symbols to metadata...")
+    logger.info(f"🔄 Syncing {len(records)} symbols to metadata...")
     if records:
-        try:
-            supabase.table("ticker_metadata").upsert(records, on_conflict="symbol").execute()
-        except Exception as e:
-            logger.error(f"❌ Metadata sync failed: {e}")
+        # This uses the simplified schema we confirmed in your last error log
+        supabase.table("ticker_metadata").upsert(records, on_conflict="symbol").execute()
 
 def populate_market_data():
     clients = get_clients()
