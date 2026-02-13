@@ -1,26 +1,45 @@
-import supabase
+import os
+from dotenv import load_dotenv
+from supabase import create_client
 
 def purge_rotating_data():
-    # Retention Policy:
-    # 15Min: 180 Days (Execution context)
-    # 1Hour: 1 Year (Intraday trend)
-    # 4Hour: 2 Years (Swing trend - Keep this for your prop firm strategies)
-    # Daily: Forever (Backtesting & Portfolio tracking)
+    # Load configuration
+    load_dotenv()
+    SUPABASE_URL = os.getenv('SUPABASE_URL')
+    SUPABASE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
+    
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("❌ Supabase credentials not found in .env")
+        return
 
+    # Initialize Client
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+    # Retention Policy:
+    # 15Min: 180 Days
+    # 1Hour: 1 Year
+    # 4Hour: 2 Years
+    # Daily: Forever
+    
+    # Note: VACUUM usually cannot be run inside a transaction or via standard RPC 
+    # unless 'run_sql' is specifically configured to handle it (which is rare/risky).
+    # It's better to manage VACUUM via Supabase's built-in maintenance or a direct DB connection.
+    
     queries = [
         "DELETE FROM market_data WHERE timeframe = '15Min' AND timestamp < NOW() - INTERVAL '180 days';",
         "DELETE FROM market_data WHERE timeframe = '1Hour' AND timestamp < NOW() - INTERVAL '1 year';",
-        "DELETE FROM market_data WHERE timeframe = '4Hour' AND timestamp < NOW() - INTERVAL '2 years';",
-        "VACUUM market_data;"  # Reclaims physical disk space
+        "DELETE FROM market_data WHERE timeframe = '4Hour' AND timestamp < NOW() - INTERVAL '2 years';"
     ]
 
     for q in queries:
         try:
-            # You'll need to enable a 'run_sql' RPC in Supabase or use a direct Postgres connection
-            supabase.postgrest.rpc("run_sql_maintenance", {"query": q}).execute()
+            # Assumes a stored procedure 'run_sql_maintenance' exists that executes the string
+            # Warning: Allowing raw SQL execution via RPC is a security risk. 
+            # Prefer specific RPCs for specific tasks if possible.
+            supabase.rpc("run_sql_maintenance", {"query": q}).execute()
             print(f"✅ Executed: {q[:40]}...")
         except Exception as e:
-            print(f"⚠️ Purge failed: {e}")
+            print(f"⚠️ Task failed: {e}")
 
 
 if __name__ == "__main__":

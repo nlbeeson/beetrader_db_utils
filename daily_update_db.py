@@ -1,41 +1,10 @@
-import os
-import pandas as pd
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
-from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest, CryptoBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-from supabase import create_client
-from populate_db import get_ticker_universe, populate_lane
-
-
-# --- 1. CONFIGURATION ---
-load_dotenv()
-ALPACA_KEY = os.getenv('APCA_API_KEY_ID')
-ALPACA_SECRET = os.getenv('APCA_API_SECRET_KEY')
-SUPABASE_URL = os.getenv('SUPABASE_URL')
-SUPABASE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
-
-# Initialize Clients
-stock_client = StockHistoricalDataClient(ALPACA_KEY, ALPACA_SECRET)
-crypto_client = CryptoHistoricalDataClient(ALPACA_KEY, ALPACA_SECRET)
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-import os
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
-from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest, CryptoBarsRequest
-from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-from supabase import create_client
-
-# Load from your existing .env
-load_dotenv()
-
-
-# ... (Client initialization same as your populate_db.py) ...
+from populate_db import get_ticker_universe, populate_lane, get_clients
 
 def run_daily_update():
+    # Initialize clients using the shared helper
+    clients = get_clients()
+    
     # Use your provided Russell 2000 CSV + Watchlist
     universe = get_ticker_universe()
 
@@ -49,7 +18,8 @@ def run_daily_update():
 
     for target in targets:
         for a_class, s_list in universe.items():
-            populate_lane(s_list, target["tf"], target["label"], target["days"], a_class)
+            # Pass the clients to reuse connections and configuration
+            populate_lane(s_list, target["tf"], target["label"], target["days"], a_class, clients=clients)
 
 
 if __name__ == "__main__":

@@ -1,27 +1,28 @@
 import time
 import pandas as pd
 import os
+import glob
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest, CryptoBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from supabase import create_client
-import glob
-import xml.etree.ElementTree as ET
 
 # --- 1. CONFIGURATION ---
-load_dotenv()
-ALPACA_KEY = os.getenv('APCA_API_KEY_ID')
-ALPACA_SECRET = os.getenv('APCA_API_SECRET_KEY')
-SUPABASE_URL = os.getenv('SUPABASE_URL')
-SUPABASE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
+def get_clients():
+    load_dotenv()
+    ALPACA_KEY = os.getenv('APCA_API_KEY_ID')
+    ALPACA_SECRET = os.getenv('APCA_API_SECRET_KEY')
+    SUPABASE_URL = os.getenv('SUPABASE_URL')
+    SUPABASE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
 
-# Initialize Clients
-stock_client = StockHistoricalDataClient(ALPACA_KEY, ALPACA_SECRET)
-crypto_client = CryptoHistoricalDataClient(ALPACA_KEY, ALPACA_SECRET)
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
+    stock_client = StockHistoricalDataClient(ALPACA_KEY, ALPACA_SECRET)
+    crypto_client = CryptoHistoricalDataClient(ALPACA_KEY, ALPACA_SECRET)
+    supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    
+    return stock_client, crypto_client, supabase_client
 
 # --- 2. TICKER UNIVERSE ---
 
@@ -67,7 +68,12 @@ def get_ticker_universe():
     }
 
 # --- 3. CORE FETCHER ---
-def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_class):
+def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_class, clients=None):
+    if clients is None:
+        stock_client, crypto_client, supabase = get_clients()
+    else:
+        stock_client, crypto_client, supabase = clients
+
     start_date = datetime.now() - timedelta(days=days_back)
     is_alt = asset_class in ['FOREX', 'CRYPTO']
     client = crypto_client if is_alt else stock_client
@@ -113,6 +119,7 @@ def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_clas
 
 # --- 4. EXECUTION ---
 if __name__ == "__main__":
+    clients = get_clients()
     universe = get_ticker_universe()
 
     targets = [
@@ -124,4 +131,4 @@ if __name__ == "__main__":
 
     for target in targets:
         for a_class, s_list in universe.items():
-            populate_lane(s_list, target["tf"], target["label"], target["days"], a_class)
+            populate_lane(s_list, target["tf"], target["label"], target["days"], a_class, clients=clients)
