@@ -28,14 +28,32 @@ def get_ticker_universe():
     # Russell 3000 scraper via IWV
     iwv_url = "https://www.ishares.com/us/products/239714/ishares-russell-3000-etf/1467271812596.ajax?fileType=csv&fileName=IWV_holdings&dataType=fund"
     headers = {'User-Agent': 'Mozilla/5.0'}
-    res = requests.get(iwv_url, headers=headers)
-    df = pd.read_csv(io.StringIO(res.text), skiprows=9)
 
-    # Equity clean-up
-    equities = [str(t).strip() for t in df['Ticker'].dropna().unique()
-                if len(str(t)) <= 5 and str(t).isalpha()]
+    try:
+        res = requests.get(iwv_url, headers=headers)
+        # Read raw lines to find where the data actually starts
+        lines = res.text.splitlines()
+        header_idx = 0
+        for i, line in enumerate(lines):
+            if 'Ticker' in line or 'Symbol' in line:
+                header_idx = i
+                break
 
-    # Other instruments (Mapped for Alpaca SDK)
+        # Read again starting from the correct header row
+        df = pd.read_csv(io.StringIO('\n'.join(lines[header_idx:])))
+
+        # Handle cases where column might be named 'Symbol' instead of 'Ticker'
+        ticker_col = 'Ticker' if 'Ticker' in df.columns else 'Symbol'
+
+        equities = [str(t).strip() for t in df[ticker_col].dropna().unique()
+                    if len(str(t)) <= 5 and str(t).isalpha()]
+
+        print(f"✅ Scraped {len(equities)} equities from Russell 3000.")
+
+    except Exception as e:
+        print(f"⚠️ Russell 3000 scrape failed ({e}), using fallback small list.")
+        equities = ['AAPL', 'MSFT', 'TSLA', 'AMZN', 'GOOGL']
+
     forex = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'AUD/USD', 'USD/CAD', 'USD/CHF', 'NZD/USD',
              'EUR/JPY', 'GBP/JPY', 'GBP/NZD', 'EUR/NZD', 'CHF/JPY', 'GBP/AUD', 'GBP/CAD',
              'GBP/CHF', 'NZD/JPY', 'EUR/CAD', 'CAD/JPY', 'AUD/NZD', 'AUD/JPY', 'NZD/CHF',
@@ -44,8 +62,6 @@ def get_ticker_universe():
     crypto = ['BTC/USD', 'ETH/USD']
 
     return {"EQUITY": equities, "FOREX": forex, "CRYPTO": crypto}
-
-
 # --- 3. CORE FETCHER ---
 def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_class):
     start_date = datetime.now() - timedelta(days=days_back)
