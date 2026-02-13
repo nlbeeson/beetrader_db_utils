@@ -7,6 +7,8 @@ from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDa
 from alpaca.data.requests import StockBarsRequest, CryptoBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from supabase import create_client
+import glob
+import xml.etree.ElementTree as ET
 
 # --- 1. CONFIGURATION ---
 load_dotenv()
@@ -22,40 +24,47 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 # --- 2. TICKER UNIVERSE ---
+
 def get_ticker_universe():
-    print("📂 Loading tickers from provided CSV file...")
+    print("📂 Scanning for latest iShares import...")
+    equities = []
+
+    # 1. Automatically find the most recent XML file in your folder
+    import_files = glob.glob('ticker_imports/*.xml')
+    if not import_files:
+        print("⚠️ No XML file found in ticker_imports/. Using fallback.")
+        return {"EQUITY": ['AAPL', 'MSFT', 'TSLA'], "FOREX": [], "CRYPTO": []}
+
+    latest_file = max(import_files, key=os.path.getctime)
+    print(f"📄 Processing: {latest_file}")
+
     try:
-        # Load from your uploaded file
-        df = pd.read_csv('russell_2000_components.csv')
-        csv_tickers = df['Ticker'].dropna().unique().tolist()
+        tree = ET.parse(latest_file)
+        root = tree.getroot()
+        ns = {'ss': 'urn:schemas-microsoft-com:office:spreadsheet'}
 
-        # Merge with your core high-volume watchlist
-        watchlist = [
-            'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'PLTR', 'SQ',
-            'PYPL', 'SHOP', 'UBER', 'ABNB', 'SNOW', 'COIN', 'MARA', 'RIOT'
-        ]
+        for row in root.findall('.//ss:Row', ns):
+            cells = row.findall('ss:Cell', ns)
+            if not cells: continue
 
-        # Clean and combine
-        combined = list(set([str(t).strip() for t in (csv_tickers + watchlist)]))
+            # The Ticker is in the first cell of the row
+            ticker_data = cells[0].find('ss:Data', ns)
+            if ticker_data is not None:
+                t = str(ticker_data.text).strip()
+                # Validation: Standard equity tickers only
+                if len(t) <= 5 and t.isalpha() and t != 'Ticker':
+                    equities.append(t)
 
-        # Filter for Alpaca-friendly symbols
-        equities = [t for t in combined if len(t) <= 5 and t.isalpha()]
-
-        print(f"✅ Success! Prepared {len(equities)} total equities for population.")
+        print(f"✅ Extracted {len(equities)} tickers from iShares XML.")
     except Exception as e:
-        print(f"❌ Error loading CSV: {e}")
-        exit(1)
+        print(f"❌ Failed to parse XML: {e}")
 
-    forex = [
-        'EUR/USD', 'USD/JPY', 'GBP/USD', 'AUD/USD', 'USD/CAD', 'USD/CHF', 'NZD/USD',
-        'EUR/JPY', 'GBP/JPY', 'GBP/NZD', 'EUR/NZD', 'CHF/JPY', 'GBP/AUD', 'GBP/CAD',
-        'GBP/CHF', 'NZD/JPY', 'EUR/CAD', 'CAD/JPY', 'AUD/NZD', 'AUD/JPY', 'NZD/CHF',
-        'EUR/AUD', 'AUD/CAD', 'NZD/CAD', 'EUR/CHF', 'AUD/CHF', 'CAD/CHF'
-    ]
-
-    crypto = ['BTC/USD', 'ETH/USD']
-    return {"EQUITY": equities, "FOREX": forex, "CRYPTO": crypto}
-
+    # Deduplicate and return
+    return {
+        "EQUITY": list(set(equities)),
+        "FOREX": ['EUR/USD', 'USD/JPY', 'GBP/USD'],
+        "CRYPTO": ['BTC/USD', 'ETH/USD']
+    }
 
 # --- 3. CORE FETCHER ---
 def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_class):
