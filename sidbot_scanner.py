@@ -33,7 +33,7 @@ def run_sidbot_scanner():
     clients = get_clients()
     supabase = clients['supabase_client']
 
-    # 1. PRUNE: Remove signals based on the ORIGINAL touch date (28 days max life)
+    # 1. PRUNE based on the ORIGINAL touch date, not the last update
     logger.info("🧹 Pruning signals where the 28-day window has expired...")
     cutoff = (datetime.now() - timedelta(days=28)).isoformat()
     supabase.table("signal_watchlist").delete().lt("rsi_touch_date", cutoff).execute()
@@ -111,18 +111,15 @@ def run_sidbot_scanner():
                 is_ready = all([rsi_align, w_rsi_align, macd_align, earnings_safe])
                 macd_cross = curr_macd > curr_sig if direction == 'LONG' else curr_macd < curr_sig
 
-                # PERSISTENT TOUCH DATE: Only set if new, otherwise keep old
+                # 2. Persist the touch date
                 touch_date = existing['rsi_touch_date'] if existing else datetime.now().isoformat()
 
                 bulk_results.append({
-                    "symbol": symbol, "direction": direction, "rsi_touch_value": float(curr_rsi),
-                    "rsi_touch_date": touch_date,  # This makes the 28-day rule work
-                    "extreme_price": float(ext_price), "atr": float(atr_val), "is_ready": is_ready,
-                    "next_earnings": report_date_str,
-                    "logic_trail": {
-                        "d_rsi": float(curr_rsi), "w_rsi": float(curr_w_rsi),
-                        "macd_ready": bool(macd_align), "macd_cross": bool(macd_cross)
-                    },
+                    "symbol": symbol,
+                    "direction": direction,
+                    "rsi_touch_date": touch_date,  # This ensures the 28-day clock actually counts down
+                    "extreme_price": float(ext_price),
+                    "is_ready": is_ready,
                     "last_updated": datetime.now().isoformat()
                 })
 
