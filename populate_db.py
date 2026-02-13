@@ -29,32 +29,32 @@ def get_ticker_universe():
 
     try:
         res = requests.get(iwv_url, headers=headers)
-        # Try reading with utf-8-sig to handle Byte Order Marks
-        # We use skiprows=9 as confirmed by your check
-        df = pd.read_csv(io.StringIO(res.text), skiprows=9, encoding='utf-8-sig')
+        # Use a more robust CSV reader approach
+        raw_data = res.text
+        # We know Row 9 is the header. Let's slice the string directly.
+        data_start = raw_data.splitlines()[9:]
+        df = pd.read_csv(io.StringIO('\n'.join(data_start)))
 
-        # If 'Ticker' isn't the column name, let's find it dynamically
-        ticker_col = next((c for c in df.columns if 'Ticker' in c), None)
+        # Strip any hidden whitespace from column names
+        df.columns = df.columns.str.strip()
 
-        if ticker_col:
-            equities = [str(t).strip() for t in df[ticker_col].dropna().unique()
-                        if len(str(t)) <= 5 and str(t).isalpha()]
-            print(f"✅ Scraped {len(equities)} equities from Russell 3000.")
-        else:
-            raise ValueError("Could not find Ticker column")
+        # We use 'Ticker' as confirmed by your check_csv.py
+        equities = [str(t).strip() for t in df['Ticker'].dropna().unique()
+                    if len(str(t)) <= 5 and str(t).isalpha()]
 
+        print(f"✅ Scraped {len(equities)} equities from Russell 3000.")
     except Exception as e:
         print(f"⚠️ Russell 3000 scrape failed ({e}). Using fallback list.")
         equities = ['AAPL', 'MSFT', 'TSLA', 'AMZN', 'GOOGL']
 
+    # Your fixed lists
     forex = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'AUD/USD', 'USD/CAD', 'USD/CHF', 'NZD/USD',
              'EUR/JPY', 'GBP/JPY', 'GBP/NZD', 'EUR/NZD', 'CHF/JPY', 'GBP/AUD', 'GBP/CAD',
              'GBP/CHF', 'NZD/JPY', 'EUR/CAD', 'CAD/JPY', 'AUD/NZD', 'AUD/JPY', 'NZD/CHF',
              'EUR/AUD', 'AUD/CAD', 'NZD/CAD', 'EUR/CHF', 'AUD/CHF', 'CAD/CHF']
-
     crypto = ['BTC/USD', 'ETH/USD']
-    return {"EQUITY": equities, "FOREX": forex, "CRYPTO": crypto}
 
+    return {"EQUITY": equities, "FOREX": forex, "CRYPTO": crypto}
 
 # --- 3. CORE FETCHER ---
 def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_class):
