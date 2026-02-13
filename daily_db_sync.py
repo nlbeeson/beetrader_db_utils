@@ -1,72 +1,67 @@
 import os
 import time
-import psycopg2
-from alpaca_trade_api.rest import TimeFrame
+import pandas as pd
+from dotenv import load_dotenv
+from supabase import create_client
 from utils import alpaca, get_symbols
 
-# Ensure this is the postgresql:// string, not the https:// url
-DB_CONN_STRING = os.getenv('DATABASE_URL') or os.getenv('SUPABASE_DB_URL')
+# 1. Load your credentials
+load_dotenv()
+url = os.getenv("SUPABASE_URL")
+key = os.getenv("SUPABASE_SERVICE_KEY")
 
-def update_database():
-    all_symbols = get_symbols()  # Uses your existing symbol filter logic
-    if not DB_CONN_STRING:
-        print("Error: Database connection string not found in environment variables.")
+# 2. Initialize the Web Client (Port 443)
+if url and key:
+    supabase = create_client(url, key)
+else:
+    supabase = None
+
+def run_sync():
+    if not supabase:
+        print("Supabase credentials missing. Please check your .env file.")
         return
-
+    
     try:
-        conn = psycopg2.connect(DB_CONN_STRING)
-        cur = conn.cursor()
+        symbols_to_sync = get_symbols()
     except Exception as e:
-        print(f"Error connecting to database: {e}")
+        print(f"Error getting symbols: {e}")
         return
-
-    timeframes = {
-        '1Day': TimeFrame.Day,
-        '4Hour': TimeFrame.Hour * 4,
-        '1Hour': TimeFrame.Hour,
-        '15Min': TimeFrame.Minute * 15
-    }
-
-    # Batching to 200 symbols per request (Alpaca's sweet spot)
-    batch_size = 200
-    for i in range(0, len(all_symbols), batch_size):
-        batch = all_symbols[i:i + batch_size]
-
-        for tf_name, alpaca_tf in timeframes.items():
-            print(f"Syncing {tf_name} for batch starting with {batch[0]}...")
-
-            try:
-                # Multi-symbol request: 1 call replaces 200 individual calls
-                bars_df = alpaca.get_bars(batch, alpaca_tf, limit=1).df
-
-                if not bars_df.empty:
-                    for symbol, row in bars_df.iterrows():
-                        cur.execute("""
-                                    INSERT INTO market_data (symbol, timestamp, timeframe, open, high, low, close, volume)
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                                    ON CONFLICT ON CONSTRAINT unique_market_bar
-                                        DO UPDATE SET open   = EXCLUDED.open,
-                                                      high   = EXCLUDED.high,
-                                                      low    = EXCLUDED.low,
-                                                      close  = EXCLUDED.close,
-                                                      volume = EXCLUDED.volume;
-                                    """, (symbol.replace('/', ''), row.name, tf_name, float(row['open']), float(row['high']),
-                                          float(row['low']), float(row['close']), int(row['volume'])))
-
-                # Manual rate limit to be safe (1 second between timeframe calls)
-                time.sleep(1)
-
-            except Exception as e:
-                print(f"Error in batch {i} for {tf_name}: {e}")
+    print(f"Starting sync for {len(symbols_to_sync)} symbols...")
+    
+    # Syncing daily bars for today
+    for idx, symbol in enumerate(symbols_to_sync, 1):
+        try:
+            # Fetch latest daily bar
+            df = alpaca.get_bars(symbol, '1Day', limit=1, adjustment='all').df
+            if df.empty:
                 continue
+                
+            last_bar = df.iloc[-1]
+            clean_ts = df.index[-1].isoformat()
+            
+            payload = {
+                "symbol": symbol.replace('/', ''),
+                "timestamp": clean_ts,
+                "open": float(last_bar['open']),
+                "high": float(last_bar['high']),
+                "low": float(last_bar['low']),
+                "close": float(last_bar['close']),
+                "volume": int(last_bar['volume']),
+                "vwap": float(last_bar.get('vw', last_bar['close'])),
+                "timeframe": '1Day'
+            }
 
-        # Commit every batch to keep the WAL log from bloating
-        conn.commit()
-        print(f"--- Batch complete. {i + len(batch)} symbols processed. ---")
-
-    cur.close()
-    conn.close()
-    print("Database sync complete.")
+            supabase.table("market_data").upsert(
+                payload,
+                on_conflict="symbol,timestamp,timeframe",
+                ignore_duplicates=True
+            ).execute()
+            
+            if idx % 100 == 0:
+                print(f"Synced {idx}/{len(symbols_to_sync)}...")
+                
+        except Exception as e:
+            print(f"Error syncing {symbol}: {e}")
 
 if __name__ == "__main__":
-    update_database()
+    run_sync()

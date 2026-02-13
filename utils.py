@@ -4,11 +4,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Alpaca API Credentials
 APCA_API_KEY_ID = os.getenv('APCA_API_KEY_ID')
 APCA_API_SECRET_KEY = os.getenv('APCA_API_SECRET_KEY')
 APCA_URL = os.getenv('APCA_URL', 'https://paper-api.alpaca.markets')
 
-alpaca = tradeapi.REST(APCA_API_KEY_ID, APCA_API_SECRET_KEY, APCA_URL)
+if APCA_API_KEY_ID and APCA_API_SECRET_KEY:
+    alpaca = tradeapi.REST(APCA_API_KEY_ID, APCA_API_SECRET_KEY, APCA_URL)
+else:
+    alpaca = None
 
 FOREX_PAIRS = [
     'GBP/NZD', 'GBP/JPY', 'EUR/NZD', 'CHF/JPY', 'GBP/AUD', 'GBP/CAD', 'GBP/CHF', 'NZD/JPY',
@@ -18,6 +22,9 @@ FOREX_PAIRS = [
 ]
 
 def get_symbols():
+    if not alpaca:
+        print("Alpaca credentials missing. Returning FOREX_PAIRS only.")
+        return FOREX_PAIRS
     try:
         # Fetch all active US equities
         active_assets = alpaca.list_assets(status='active', asset_class='us_equity')
