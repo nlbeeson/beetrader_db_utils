@@ -27,11 +27,12 @@ def get_clients():
 
 
 def get_tickers_from_ishares_xml(file_path):
-    """Parses the iShares Russell 1000 Growth XML for tickers."""
+    import pandas as pd
     try:
-        df = pd.read_excel(file_path, sheet_name='Holdings', skiprows=9)
+        # Added engine='openpyxl' for Linux compatibility
+        df = pd.read_excel(file_path, sheet_name='Holdings', skiprows=9, engine='openpyxl')
         tickers = df['Ticker'].dropna().unique().tolist()
-        return [t for t in tickers if len(str(t)) <= 5]
+        return [str(t).strip() for t in tickers if len(str(t)) <= 5]
     except Exception as e:
         logger.error(f"Error parsing iShares XML: {e}")
         return []
@@ -57,12 +58,14 @@ def get_additional_tickers(file_path):
 
 
 def sync_ticker_metadata(symbols):
-    """Updates the ticker_metadata table with the combined list of symbols."""
+    """Simplified sync to match your existing Supabase schema"""
     supabase = get_clients()['supabase_client']
-    records = [{"symbol": s, "asset_class": "US_EQUITY", "source": "combined_import"} for s in symbols]
+    # Removed asset_class to avoid the PGRST204 error
+    records = [{"symbol": s, "source": "combined_import"} for s in symbols]
 
     logger.info(f"🔄 Syncing {len(symbols)} symbols to metadata...")
-    supabase.table("ticker_metadata").upsert(records, on_conflict="symbol").execute()
+    if records:
+        supabase.table("ticker_metadata").upsert(records, on_conflict="symbol").execute()
 
 
 def populate_market_data():
