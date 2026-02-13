@@ -14,8 +14,8 @@ from alpaca.data.timeframe import TimeFrame
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-ALPACA_KEY = os.getenv("ALPACA_API_KEY")
-ALPACA_SECRET = os.getenv("ALPACA_SECRET_KEY")
+ALPACA_KEY = os.getenv("APCA_API_KEY_ID")
+ALPACA_SECRET = os.getenv("APCA_API_SECRET_KEY")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s:%(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
