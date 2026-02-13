@@ -1,0 +1,5 @@
+alpaca-py
+supabase
+pandas
+python-dotenv
+requests
