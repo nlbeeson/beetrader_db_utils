@@ -63,13 +63,23 @@ def run_sidbot_scanner():
             if existing.data and not final_dir:
                 final_dir = existing.data[0]['direction']
 
-            if final_dir:
-                # 5. THE TRIPLE SLOPE TURN (The Correction)
+                # --- THE TRIPLE SLOPE TURN FIX ---
                 if final_dir == 'LONG':
-                    is_ready = all([curr_rsi > prev_rsi, curr_w_rsi > prev_w_rsi, curr_macd > prev_macd])
+                    # All indicators must be pointing UP
+                    ready = (curr_rsi > prev_rsi) and (curr_w_rsi > prev_w_rsi) and (curr_macd > prev_macd)
                 else:  # SHORT
-                    is_ready = all([curr_rsi < prev_rsi, curr_w_rsi < prev_w_rsi, curr_macd < prev_macd])
+                    # All indicators must be pointing DOWN
+                    # If RSI is rising (like your AVT case), this will return False
+                    ready = (curr_rsi < prev_rsi) and (curr_w_rsi < prev_w_rsi) and (curr_macd < prev_macd)
 
+                # Only upsert if ready matches your 4-Hard-Rules criteria
+                supabase.table("signal_watchlist").upsert({
+                    "symbol": symbol,
+                    "direction": final_dir,
+                    "is_ready": ready,  # This now strictly requires the turn
+                    "last_updated": datetime.now().isoformat()
+                    # ... other fields
+                }, on_conflict="symbol").execute()
                 # 6. DYNAMIC STOP LOSS (Extreme Price)
                 low_val, high_val = df['low'].iloc[-1], df['high'].iloc[-1]
                 if existing.data:
