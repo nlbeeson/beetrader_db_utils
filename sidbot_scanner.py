@@ -34,9 +34,9 @@ def run_sidbot_scanner():
     clients = get_clients()
     supabase = clients['supabase_client']
 
-    # 1. PRUNE: Remove signals older than 21 days
-    logger.info("🧹 Pruning signals older than 21 days...")
-    cutoff = (datetime.now() - timedelta(days=21)).isoformat()
+    # 1. PRUNE: Remove signals older than 28 days
+    logger.info("🧹 Pruning signals older than 28 days...")
+    cutoff = (datetime.now() - timedelta(days=28)).isoformat()
     supabase.table("signal_watchlist").delete().lt("last_updated", cutoff).execute()
 
     # 2. FETCH FULL MASTER LIST (Bypassing 1000 row limit)
