@@ -1,5 +1,6 @@
 import os
 import resend
+import json
 from datetime import datetime
 from dotenv import load_dotenv
 from populate_db import get_clients
@@ -19,58 +20,57 @@ def generate_html_report():
     clients = get_clients()
     supabase = clients['supabase_client']
 
-    # Fetch all signals current in the watchlist
+    # 1. Fetch all signals current in the watchlist
     query = supabase.table("signal_watchlist").select("*").execute()
     data = query.data
 
-    # We still want to send the heartbeat even if data is empty
-    if not data:
-        return 0, 0, 0, "<h2>No active signals found in the database.</h2>"
-
+    # Even if empty, we continue to generate the heartbeat for the email
     confirmed_rows = ""
     potential_rows = ""
-    pattern_count = 0
     ready_count = 0
+    pattern_count = 0
 
-    for row in data:
-        symbol = row['symbol']
-        direction = row['direction']
-        trail = row.get('logic_trail', {})
-        conf = trail.get('confirmations', {})
+    if data:
+        for row in data:
+            symbol = row['symbol']
+            direction = row['direction']
+            trail = row.get('logic_trail', {})
+            conf = trail.get('confirmations', {})
 
-        # Increment Heartbeat Stats
-        if row['is_ready']: ready_count += 1
-        if conf.get('pattern'): pattern_count += 1
+            # Update stats
+            if row['is_ready']: ready_count += 1
+            if conf.get('pattern'): pattern_count += 1
 
-        # Determine Pattern Label
-        pattern_label = "None"
-        if conf.get('pattern'):
-            pattern_label = "Double Bottom" if direction == "LONG" else "Double Top"
-            pattern_label += f" (Δ{conf.get('pattern_spread', 0):.2f})"
+            # Determine Pattern Label (Double Top/Bottom)
+            pattern_label = "None"
+            if conf.get('pattern'):
+                pattern_label = "Double Bottom" if direction == "LONG" else "Double Top"
+                pattern_label += f" (Δ{conf.get('pattern_spread', 0):.2f})"
 
-        mkt_status = '✅' if conf.get('market') else '❌'
-        sec_status = '✅' if conf.get('sector') else '❌'
+            # Context Icons (Market/Sector)
+            mkt_status = '✅' if conf.get('market') else '❌'
+            sec_status = '✅' if conf.get('sector') else '❌'
 
-        # Build HTML table row
-        html_row = f"""
-            <tr>
-                <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">
-                    <a href="{get_tv_url(symbol)}" style="color: #2962ff; font-weight: bold; text-decoration: none;">{symbol}</a>
-                </td>
-                <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">{direction}</td>
-                <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">${row['extreme_price']:.2f}</td>
-                <td style="padding: 10px; border: 1px solid #ddd; text-align: center; font-weight: bold;">{row['confidence_score']}/3</td>
-                <td style="padding: 10px; border: 1px solid #ddd; text-align: center; color: #555;">{pattern_label}</td>
-                <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">M:{mkt_status} S:{sec_status}</td>
-            </tr>
-        """
+            # HTML Table Row Construction
+            html_row = f"""
+                <tr>
+                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">
+                        <a href="{get_tv_url(symbol)}" style="color: #2962ff; font-weight: bold; text-decoration: none;">{symbol}</a>
+                    </td>
+                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">{direction}</td>
+                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">${row['extreme_price']:.2f}</td>
+                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center; font-weight: bold;">{row['confidence_score']}/3</td>
+                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center; color: #555;">{pattern_label}</td>
+                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">M:{mkt_status} S:{sec_status}</td>
+                </tr>
+            """
 
-        if row['is_ready']:
-            confirmed_rows += html_row
-        else:
-            potential_rows += html_row
+            if row['is_ready']:
+                confirmed_rows += html_row
+            else:
+                potential_rows += html_row
 
-    # Full HTML Template
+    # 2. Assemble Full HTML Document
     html_content = f"""
     <html>
     <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333; line-height: 1.6;">
@@ -78,20 +78,28 @@ def generate_html_report():
             <h2 style="text-align: center; color: #2c3e50;">SidBot Intelligence Report</h2>
             <p style="text-align: center; color: #7f8c8d;">{datetime.now().strftime('%A, %b %d, %Y')}</p>
 
-            <h3 style="color: #e74c3c; border-bottom: 2px solid #e74c3c; padding-bottom: 5px;">🔥 CONFIRMED ENTRIES (Momentum Ready)</h3>
+            <h3 style="color: #e74c3c; border-bottom: 2px solid #e74c3c; padding-bottom: 5px;">🔥 CONFIRMED ENTRIES (Hard Rules Met)</h3>
             <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
                 <thead style="background: #f8f9fa;">
                     <tr><th>Symbol</th><th>Dir</th><th>Stop</th><th>Score</th><th>Pattern</th><th>Context</th></tr>
                 </thead>
-                <tbody>{confirmed_rows if confirmed_rows else '<tr><td colspan="6" style="text-align:center; padding:20px;">No momentum matches found in this scan.</td></tr>'}</tbody>
+                <tbody>{confirmed_rows if confirmed_rows else '<tr><td colspan="6" style="text-align:center; padding:20px;">No momentum matches in current cycle.</td></tr>'}</tbody>
+            </table>
+
+            <h3 style="color: #3498db; border-bottom: 2px solid #3498db; padding-bottom: 5px;">⏳ WATCHLIST (Waiting Room)</h3>
+            <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
+                <thead style="background: #f8f9fa;">
+                    <tr><th>Symbol</th><th>Dir</th><th>Stop</th><th>Score</th><th>Pattern</th><th>Context</th></tr>
+                </thead>
+                <tbody>{potential_rows if potential_rows else '<tr><td colspan="6" style="text-align:center; padding:20px;">No tickers currently at RSI extremes.</td></tr>'}</tbody>
             </table>
 
             <div style="margin-top: 30px; padding: 15px; background: #f1f5f9; border-radius: 8px; border-left: 5px solid #3182ce;">
                 <strong style="color: #2c5282;">Scanner Heartbeat:</strong><br>
                 <span style="font-size: 14px; color: #2d3748;">
-                    Processed {len(data)} Tickers | 
-                    {ready_count} Momentum Signals Active | 
-                    {pattern_count} Double Top/Bottom Patterns Found
+                    Watchlist Size: {len(data) if data else 0} | 
+                    Ready for Entry: {ready_count} | 
+                    Chart Patterns Found: {pattern_count}
                 </span>
             </div>
 
@@ -101,28 +109,29 @@ def generate_html_report():
                     This report is for <strong>educational and experimental purposes only</strong>. The signals provided are generated by an automated quantitative system in a testing phase and do not constitute financial advice. Trading involves significant risk of loss. Always perform manual due diligence and consult with a licensed professional before executing any trades.
                 </p>
                 <p style="font-size: 11px; color: #9b2c2c; margin-top: 10px; font-style: italic; text-align: center;">
-                    BeeTrader SidBot v1.0 | Mint Desktop | Run Time: {datetime.now().strftime('%H:%M:%S')}
+                    BeeTrader SidBot v1.0 | Mint Desktop | System Time: {datetime.now().strftime('%H:%M:%S')}
                 </p>
             </div>
         </div>
     </body>
     </html>
     """
-    return len(data), ready_count, pattern_count, html_content
+    return ready_count, pattern_count, html_content
 
 
 def send_report():
-    total, ready, patterns, html_body = generate_html_report()
+    ready, patterns, html_body = generate_html_report()
+
     try:
         resend.Emails.send({
             "from": "SidBot Advisor <advisor@notifications.natebeeson.com>",
             "to": [EMAIL_RECEIVER],
-            "subject": f"SidBot Report: {ready} Ready | {patterns} Patterns Detected",
+            "subject": f"SidBot: {ready} Ready | {patterns} Patterns Found",
             "html": html_body
         })
         print("✅ HTML Intelligence Report sent successfully.")
     except Exception as e:
-        print(f"❌ Error dispatching report: {e}")
+        print(f"❌ Error sending report: {e}")
 
 
 if __name__ == "__main__":
