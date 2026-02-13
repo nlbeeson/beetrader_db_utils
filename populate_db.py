@@ -109,4 +109,21 @@ def populate_market_data():
                             "low": float(row['low']),
                             "close": float(row['close']),
                             "volume": int(row['volume']),
-                            "timeframe": str
+                            "timeframe": str(tf),
+                            "asset_class": "US_EQUITY",
+                            "source": "alpaca"
+                        })
+
+                    # Push to Supabase
+                    if records:
+                        supabase.table("market_data").upsert(
+                            records,
+                            on_conflict="symbol,timestamp,timeframe"
+                        ).execute()
+
+            except Exception as e:
+                logger.error(f"Error processing batch {i // 50}: {e}")
+
+
+if __name__ == "__main__":
+    populate_market_data()
