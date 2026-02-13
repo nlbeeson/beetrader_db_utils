@@ -22,6 +22,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 # --- 1. CONFIGURATION ---
 def get_clients():
     load_dotenv()
@@ -33,20 +34,24 @@ def get_clients():
     stock_client = StockHistoricalDataClient(ALPACA_KEY, ALPACA_SECRET)
     crypto_client = CryptoHistoricalDataClient(ALPACA_KEY, ALPACA_SECRET)
     supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    
-    return stock_client, crypto_client, supabase_client
 
-# --- 2. TICKER UNIVERSE ---
+    return {
+        "stock_client": stock_client,
+        "crypto_client": crypto_client,
+        "supabase_client": supabase_client
+    }
 
-def get_ticker_universe():
+
+def get_ticker_universe(supabase):
     logger.info("📂 Scanning for latest iShares import...")
     equities = []
+    metadata = []
 
-    # 1. Automatically find the most recent XML file in your folder
     import_files = glob.glob('ticker_imports/*.xml')
     if not import_files:
-        logger.warning("⚠️ No XML file found in ticker_imports/. Using fallback.")
-        return {"EQUITY": ['AAPL', 'MSFT', 'TSLA'], "FOREX": [], "CRYPTO": []}
+        logger.warning("⚠️ No XML found. Using Russell CSV fallback.")
+        df = pd.read_csv('russell_2000_components.csv')
+        return {"EQUITY": df['Ticker'].tolist()}
 
     latest_file = max(import_files, key=os.path.getctime)
     logger.info(f"📄 Processing: {latest_file}")
@@ -56,35 +61,53 @@ def get_ticker_universe():
         root = tree.getroot()
         ns = {'ss': 'urn:schemas-microsoft-com:office:spreadsheet'}
 
+        # Identify Column Indices dynamically
+        header_row = None
         for row in root.findall('.//ss:Row', ns):
             cells = row.findall('ss:Cell', ns)
-            if not cells: continue
+            values = [c.find('ss:Data', ns).text if c.find('ss:Data', ns) is not None else '' for c in cells]
+            if 'Ticker' in values and 'Sector' in values:
+                header_row = values
+                break
 
-            # The Ticker is in the first cell of the row
-            ticker_data = cells[0].find('ss:Data', ns)
-            if ticker_data is not None:
-                t = str(ticker_data.text).strip()
-                # Validation: Standard equity tickers only
-                if len(t) <= 5 and t.isalpha() and t != 'Ticker':
-                    equities.append(t)
+        t_idx = header_row.index('Ticker')
+        s_idx = header_row.index('Sector')
 
-        logger.info(f"✅ Extracted {len(equities)} tickers from iShares XML.")
+        for row in root.findall('.//ss:Row', ns):
+            cells = row.findall('ss:Cell', ns)
+            if len(cells) <= max(t_idx, s_idx): continue
+
+            t_data = cells[t_idx].find('ss:Data', ns)
+            s_data = cells[s_idx].find('ss:Data', ns)
+
+            if t_data is not None:
+                ticker = str(t_data.text).strip()
+                sector = str(s_data.text).strip() if s_data is not None else 'Unknown'
+
+                if len(ticker) <= 5 and ticker.isalpha() and ticker != 'Ticker':
+                    equities.append(ticker)
+                    metadata.append({"symbol": ticker, "sector": sector})
+
+        # Save metadata so the scanner knows which Sector ETF to check
+        if metadata:
+            logger.info(f"💾 Syncing Sector metadata for {len(metadata)} symbols...")
+            for i in range(0, len(metadata), 500):
+                supabase.table("ticker_metadata").upsert(metadata[i:i + 500], on_conflict="symbol").execute()
+
     except Exception as e:
-        logger.error(f"❌ Failed to parse XML: {e}")
+        logger.error(f"❌ XML Error: {e}")
 
-    # Deduplicate and return
     return {
         "EQUITY": list(set(equities)),
         "FOREX": ['EUR/USD', 'USD/JPY', 'GBP/USD'],
         "CRYPTO": ['BTC/USD', 'ETH/USD']
     }
 
-# --- 3. CORE FETCHER ---
-def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_class, clients=None):
-    if clients is None:
-        stock_client, crypto_client, supabase = get_clients()
-    else:
-        stock_client, crypto_client, supabase = clients
+
+def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_class, clients):
+    supabase = clients['supabase_client']
+    stock_client = clients['stock_client']
+    crypto_client = clients['crypto_client']
 
     start_date = datetime.now() - timedelta(days=days_back)
     is_alt = asset_class in ['FOREX', 'CRYPTO']
@@ -97,7 +120,6 @@ def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_clas
                 req = CryptoBarsRequest(symbol_or_symbols=batch, timeframe=timeframe_obj, start=start_date)
                 bars = client.get_crypto_bars(req)
             else:
-                # Add price filtering for equities
                 req = StockBarsRequest(symbol_or_symbols=batch, timeframe=timeframe_obj, start=start_date,
                                        adjustment='all')
                 bars = client.get_stock_bars(req)
@@ -105,12 +127,10 @@ def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_clas
             records = []
             if bars.data:
                 for symbol, bar_list in bars.data.items():
-                    # FILTER: Check the most recent close price in the batch
-                    # This ensures only stocks > $5 enter your DB
+                    # SIDBOT RULE: Filter out stocks < $5
                     if not is_alt and bar_list:
-                        latest_price = bar_list[-1].close
-                        if latest_price < 5.00:
-                            continue  # Skip penny stocks
+                        if bar_list[-1].close < 5.00:
+                            continue
 
                     for b in bar_list:
                         records.append({
@@ -128,16 +148,15 @@ def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_clas
                         records[j:j + 1000],
                         on_conflict="symbol,timestamp,timeframe"
                     ).execute()
-                logger.info(f"✅ {asset_class} | {timeframe_label} | Batch {i // 50 + 1} processed.")
 
             time.sleep(0.5)
         except Exception as e:
             logger.error(f"❌ Error on {asset_class} batch starting with {batch[0]}: {e}")
 
-# --- 4. EXECUTION ---
+
 if __name__ == "__main__":
-    clients = get_clients()
-    universe = get_ticker_universe()
+    c = get_clients()
+    u = get_ticker_universe(c['supabase_client'])
 
     targets = [
         {"label": "1Day", "tf": TimeFrame.Day, "days": 3285},
@@ -147,5 +166,5 @@ if __name__ == "__main__":
     ]
 
     for target in targets:
-        for a_class, s_list in universe.items():
-            populate_lane(s_list, target["tf"], target["label"], target["days"], a_class, clients=clients)
+        for a_class, s_list in u.items():
+            populate_lane(s_list, target["tf"], target["label"], target["days"], a_class, c)

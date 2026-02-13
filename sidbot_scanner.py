@@ -19,6 +19,90 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Mapping iShares Sector names to State Street SPDR ETFs
+SECTOR_MAP = {
+    'Information Technology': 'XLK',
+    'Financials': 'XLF',
+    'Health Care': 'XLV',
+    'Energy': 'XLE',
+    'Utilities': 'XLU',
+    'Consumer Discretionary': 'XLY',
+    'Consumer Staples': 'XLP',
+    'Industrials': 'XLI',
+    'Materials': 'XLB',
+    'Real Estate': 'XLRE',
+    'Communication': 'XLC'
+}
+
+
+def check_etf_alignment(etf_symbol, direction, supabase):
+    """
+    Returns True if the ETF's RSI and MACD Line are moving
+    in the same direction as the intended trade.
+    """
+    try:
+        # Fetch last 30 days of ETF data
+        data = supabase.table("market_data") \
+            .select("close") \
+            .eq("symbol", etf_symbol) \
+            .eq("timeframe", "1Day") \
+            .order("timestamp", desc=True) \
+            .limit(30).execute()
+
+        if len(data.data) < 26: return False
+        df = pd.DataFrame(data.data).iloc[::-1]
+
+        # Calculate momentum
+        rsi = RSIIndicator(close=df['close']).rsi()
+        macd_line = MACD(close=df['close']).macd()
+
+        rsi_up = rsi.iloc[-1] > rsi.iloc[-2]
+        macd_up = macd_line.iloc[-1] > macd_line.iloc[-2]
+
+        if direction == 'LONG':
+            return rsi_up and macd_up
+        else:  # SHORT
+            return (not rsi_up) and (not macd_up)
+
+    except Exception as e:
+        logger.error(f"Error checking ETF {etf_symbol}: {e}")
+        return False
+
+
+def calculate_market_context_score(symbol, direction, supabase):
+    """
+    Calculates a score (0-2) based on SPY and Sector alignment.
+    """
+    score = 0
+
+    # 1. Broad Market Check (SPY)
+    if check_etf_alignment('SPY', direction, supabase):
+        score += 1
+
+    # 2. Sector Check
+    meta = supabase.table("ticker_metadata").select("sector").eq("symbol", symbol).execute()
+    if meta.data:
+        sector_name = meta.data[0]['sector']
+        etf_ticker = SECTOR_MAP.get(sector_name)
+        if etf_ticker and check_etf_alignment(etf_ticker, direction, supabase):
+            score += 1
+
+    return score
+
+def get_market_wind_score(symbol_sector, supabase):
+    score = 0
+    # 1. Check SPY (Market)
+    spy_ready = check_etf_alignment('SPY', supabase)
+    if spy_ready: score += 1
+
+    # 2. Check Sector ETF
+    sector_ticker = SECTOR_MAP.get(symbol_sector)
+    if sector_ticker:
+        sector_ready = check_etf_alignment(sector_ticker, supabase)
+        if sector_ready: score += 1
+
+    return score
+
 
 def get_weekly_rsi_resampled(df_daily):
     """
