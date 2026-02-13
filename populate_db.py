@@ -102,20 +102,28 @@ def sync_ticker_metadata(symbols):
         supabase.table("ticker_metadata").upsert(records, on_conflict="symbol").execute()
 
 def populate_market_data():
+    import glob  # Add this at the top of the file
     clients = get_clients()
     supabase = clients['supabase_client']
     alpaca = clients['alpaca_client']
 
-    # 1. COMBINE TICKER LISTS
-    # Replace these paths with your actual filenames in ticker_imports/
-    main_file = "ticker_imports/iShares-Russell-1000-Growth-ETF_fund.xml"
+    # 1. DYNAMIC FILE DISCOVERY
+    # Looks for any XML file in ticker_imports that starts with 'iShares'
+    ishares_files = glob.glob("ticker_imports/iShares*.xml")
+    main_file = ishares_files[0] if ishares_files else None
     extra_file = "ticker_imports/manual_watchlist.csv"
 
-    symbols = get_tickers_from_ishares_xml(main_file)
-    extra_symbols = get_additional_tickers(extra_file)
+    symbols = []
+    if main_file:
+        logger.info(f"📂 Found iShares file: {main_file}")
+        symbols = get_tickers_from_ishares_xml(main_file)
+    else:
+        logger.error("❌ No iShares XML file found in ticker_imports/")
 
-    # Merge and remove duplicates
-    combined_symbols = list(set(symbols + extra_symbols))
+        extra_symbols = get_additional_tickers(extra_file)
+        combined_symbols = list(set(symbols + extra_symbols))
+
+        # Rest of the script remains the same...
 
     # 2. Sync metadata first to ensure the 'map' is correct
     sync_ticker_metadata(combined_symbols)
