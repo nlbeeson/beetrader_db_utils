@@ -1,9 +1,7 @@
 import os
-from datetime import datetime
-
 import resend
+from datetime import datetime
 from dotenv import load_dotenv
-
 from populate_db import get_clients
 
 # --- CONFIG ---
@@ -13,7 +11,7 @@ EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 
 
 def get_tv_url(symbol):
-    """Generates a TradingView chart URL for a given symbol."""
+    """Generates a TradingView chart URL."""
     return f"https://www.tradingview.com/chart/?symbol={symbol}"
 
 
@@ -21,111 +19,94 @@ def generate_html_report():
     clients = get_clients()
     supabase = clients['supabase_client']
 
-    # Fetch signals from the last 24 hours
     query = supabase.table("signal_watchlist").select("*").execute()
     data = query.data
 
     if not data:
-        return False, "<h2>No active signals found in the database today.</h2>"
+        return 0, 0, 0, "<h2>No active signals found in database.</h2>"
 
     confirmed_rows = ""
     potential_rows = ""
+    pattern_count = 0
+    ready_count = 0
 
     for row in data:
         symbol = row['symbol']
         direction = row['direction']
-        tv_link = get_tv_url(symbol)
         trail = row.get('logic_trail', {})
         conf = trail.get('confirmations', {})
 
-        # Determine Pattern Label
+        # Track Stats
+        if row['is_ready']: ready_count += 1
+        if conf.get('pattern'): pattern_count += 1
+
+        # Pattern Labeling
         pattern_label = "None"
         if conf.get('pattern'):
             pattern_label = "Double Bottom" if direction == "LONG" else "Double Top"
-            # Add the spread (difference) for precision checking
-            spread = conf.get('pattern_spread', 0)
-            pattern_label += f" (Δ{spread:.2f})"
+            pattern_label += f" (Δ{conf.get('pattern_spread', 0):.2f})"
 
-        # Status icons for Market and Sector
         mkt_status = '✅' if conf.get('market') else '❌'
         sec_status = '✅' if conf.get('sector') else '❌'
 
-        # Build HTML table row
         html_row = f"""
             <tr>
                 <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">
-                    <a href="{tv_link}" style="color: #2962ff; font-weight: bold; text-decoration: none;">{symbol}</a>
+                    <a href="{get_tv_url(symbol)}" style="color: #2962ff; font-weight: bold; text-decoration: none;">{symbol}</a>
                 </td>
                 <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">{direction}</td>
                 <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">${row['extreme_price']:.2f}</td>
-                <td style="padding: 10px; border: 1px solid #ddd; text-align: center; font-weight: bold;">{row['confidence_score']}/3</td>
-                <td style="padding: 10px; border: 1px solid #ddd; text-align: center; color: #555;">{pattern_label}</td>
+                <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">{row['confidence_score']}/3</td>
+                <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">{pattern_label}</td>
                 <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">M:{mkt_status} S:{sec_status}</td>
             </tr>
         """
-
         if row['is_ready']:
             confirmed_rows += html_row
         else:
             potential_rows += html_row
 
-    # Assemble HTML document
+    # Assemble HTML
     html_content = f"""
     <html>
-    <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333; line-height: 1.6;">
-        <div style="max-width: 800px; margin: auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
-            <h2 style="text-align: center; color: #2c3e50;">SidBot Daily Intelligence</h2>
-            <p style="text-align: center; color: #7f8c8d;">{datetime.now().strftime('%A, %b %d, %Y')}</p>
+    <body style="font-family: sans-serif; color: #333;">
+        <div style="max-width: 800px; margin: auto; border: 1px solid #eee; padding: 20px;">
+            <h2 style="text-align: center;">SidBot Intelligence Report</h2>
 
-            <h3 style="color: #e74c3c; border-bottom: 2px solid #e74c3c; padding-bottom: 5px;">🔥 CONFIRMED ENTRIES</h3>
-            <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
-                <thead>
-                    <tr style="background: #f8f9fa;">
-                        <th>Symbol</th><th>Dir</th><th>Stop</th><th>Score</th><th>Pattern</th><th>Context</th>
-                    </tr>
-                </thead>
-                <tbody>{confirmed_rows if confirmed_rows else '<tr><td colspan="6" style="text-align:center; padding:20px;">No confirmed signals.</td></tr>'}</tbody>
-            </table>
-
-            <h3 style="color: #3498db; border-bottom: 2px solid #3498db; padding-bottom: 5px;">⏳ POTENTIAL SETUPS (Waiting Room)</h3>
+            <h3 style="color: #e74c3c;">🔥 CONFIRMED ENTRIES (Momentum Ready)</h3>
             <table style="width: 100%; border-collapse: collapse;">
-                <thead>
-                    <tr style="background: #f8f9fa;">
-                        <th>Symbol</th><th>Dir</th><th>Stop</th><th>Score</th><th>Pattern</th><th>Context</th>
-                    </tr>
+                <thead style="background: #f8f9fa;">
+                    <tr><th>Symbol</th><th>Dir</th><th>Stop</th><th>Score</th><th>Pattern</th><th>Context</th></tr>
                 </thead>
-                <tbody>{potential_rows if potential_rows else '<tr><td colspan="6" style="text-align:center; padding:20px;">Waiting room is empty.</td></tr>'}</tbody>
+                <tbody>{confirmed_rows if confirmed_rows else '<tr><td colspan="6" style="text-align:center;">No momentum matches.</td></tr>'}</tbody>
             </table>
 
-            <div style="margin-top: 40px; padding: 20px; background-color: #fff5f5; border: 1px solid #feb2b2; border-radius: 8px;">
-            <p style="font-size: 13px; color: #c53030; margin: 0; font-weight: bold;">⚠️ Risk Disclosure & Disclaimer</p>
-            <p style="font-size: 12px; color: #742a2a; margin-top: 8px; line-height: 1.4;">
-                This report is for <strong>educational and experimental purposes only</strong>. The signals provided are generated by an automated quantitative system in a testing phase and do not constitute financial advice. Trading stocks, forex, and cryptocurrency involves significant risk of loss and is not suitable for every investor. Past performance of this scanner is not indicative of future results. Always perform your own due diligence and consult with a licensed professional before executing any trades.
-            </p>
-            <p style="font-size: 11px; color: #9b2c2c; margin-top: 10px; font-style: italic;">
-                System: BeeTrader SidBot v1.0 | Environment: Linux Mint/Supabase | Run Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-            </p>
-        </div>
+            <div style="margin-top: 30px; padding: 15px; background: #f1f5f9; border-radius: 5px;">
+                <strong>Scanner Heartbeat:</strong> Scanned {len(data)} Watchlist Tickers | {ready_count} Momentum Ready | {pattern_count} Patterns Detected
+            </div>
+
+            <div style="margin-top: 40px; padding: 15px; background: #fff5f5; border: 1px solid #feb2b2; font-size: 12px; color: #742a2a;">
+                <strong>⚠️ Disclaimer:</strong> Educational use only. Generated from an experimental quantitative system. Trading stocks involves significant risk of loss. Always perform manual due diligence before entry.
+            </div>
         </div>
     </body>
     </html>
     """
-    return confirmed_rows != "", html_content
+    return len(data), ready_count, pattern_count, html_content
 
 
 def send_report():
-    has_confirmed, html_body = generate_html_report()
-
+    total, ready, patterns, html_body = generate_html_report()
     try:
         resend.Emails.send({
-            "from": "SidBot Advisor <advisor@notifications.natebeeson.com>",
+            "from": "SidBot <onboarding@resend.dev>",
             "to": [EMAIL_RECEIVER],
-            "subject": f"SidBot: {'🚨 TRADE READY' if has_confirmed else 'No New Entries'}",
+            "subject": f"SidBot: {ready} Ready | {patterns} Patterns Found",
             "html": html_body
         })
-        print("✅ HTML Intelligence Report sent with pattern labels and TV links.")
+        print("✅ Report sent.")
     except Exception as e:
-        print(f"❌ Error dispatching report: {e}")
+        print(f"❌ Error: {e}")
 
 
 if __name__ == "__main__":
