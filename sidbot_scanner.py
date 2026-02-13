@@ -34,6 +34,10 @@ def run_sidbot_scanner():
     clients = get_clients()
     supabase = clients['supabase_client']
 
+    # Load earnings calendar into memory
+    earn_resp = supabase.table("earnings_calendar").select("*").execute()
+    earnings_map = {item['symbol']: item['report_date'] for item in earn_resp.data}
+
     # 1. PRUNE: Remove signals older than 28 days
     logger.info("🧹 Pruning signals older than 28 days...")
     cutoff = (datetime.now() - timedelta(days=28)).isoformat()
@@ -95,6 +99,18 @@ def run_sidbot_scanner():
                     ext_price = min(df_daily['low'].iloc[-1], ext_price)
                 else:
                     ext_price = max(df_daily['high'].iloc[-1], ext_price)
+
+                # --- Earnings Safety Check ---
+                report_date_str = earnings_map.get(symbol)
+                earnings_safe = True
+
+                if report_date_str:
+                    report_date = datetime.strptime(report_date_str, '%Y-%m-%d').date()
+                    days_to_earnings = (report_date - datetime.now().date()).days
+
+                    # Hard Rule: Avoid entry if earnings are within the next 7 days
+                    if 0 <= days_to_earnings <= 7:
+                        earnings_safe = False
 
                 # The 4 Hard Rules
                 rsi_up = curr_rsi > prev_rsi if final_dir == 'LONG' else curr_rsi < prev_rsi
