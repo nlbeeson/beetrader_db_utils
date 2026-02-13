@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 
 def get_weekly_rsi_resampled(df_daily):
-    """Simulates TradingView Weekly RSI by resampling daily data."""
     temp_df = df_daily.copy()
     temp_df['timestamp'] = pd.to_datetime(temp_df['timestamp'])
     temp_df.set_index('timestamp', inplace=True)
@@ -28,14 +27,14 @@ def run_sidbot_scanner():
     clients = get_clients()
     supabase = clients['supabase_client']
 
-    # 1. FETCH ALL SYMBOLS FROM METADATA (Ensures we scan all 1,013)
+    # 1. FETCH ALL SYMBOLS FROM METADATA
     tickers_resp = supabase.table("ticker_metadata").select("symbol").execute()
     symbols = [item['symbol'] for item in tickers_resp.data]
-    logger.info(f"🔎 Scanning {len(symbols)} symbols for SidBot criteria...")
+    logger.info(f"🔎 Scanning {len(symbols)} symbols...")
 
     for symbol in symbols:
         try:
-            # 2. GET DAILY DATA (Need 100 days for MACD/Weekly Resample)
+            # 2. GET DAILY DATA
             data_resp = supabase.table("market_data").select("*").eq("symbol", symbol).eq("timeframe", "1Day").order(
                 "timestamp", desc=True).limit(100).execute()
             if len(data_resp.data) < 30: continue
@@ -58,41 +57,39 @@ def run_sidbot_scanner():
             elif curr_rsi >= 70:
                 final_dir = 'SHORT'
 
-            # Check Watchlist for existing trades
             existing = supabase.table("signal_watchlist").select("*").eq("symbol", symbol).execute()
             if existing.data and not final_dir:
                 final_dir = existing.data[0]['direction']
 
-                # --- THE TRIPLE SLOPE TURN FIX ---
-                if final_dir == 'LONG':
-                    # All indicators must be pointing UP
-                    ready = (curr_rsi > prev_rsi) and (curr_w_rsi > prev_w_rsi) and (curr_macd > prev_macd)
-                else:  # SHORT
-                    # All indicators must be pointing DOWN
-                    # If RSI is rising (like your AVT case), this will return False
-                    ready = (curr_rsi < prev_rsi) and (curr_w_rsi < prev_w_rsi) and (curr_macd < prev_macd)
+            if final_dir:
+                # 5. THE TRIPLE SLOPE TURN (Strict Direction Check)
+                d_rsi_ok = (curr_rsi > prev_rsi) if final_dir == 'LONG' else (curr_rsi < prev_rsi)
+                w_rsi_ok = (curr_w_rsi > prev_w_rsi) if final_dir == 'LONG' else (curr_w_rsi < prev_w_rsi)
+                macd_ok = (curr_macd > prev_macd) if final_dir == 'LONG' else (curr_macd < prev_macd)
 
-                # Only upsert if ready matches your 4-Hard-Rules criteria
-                supabase.table("signal_watchlist").upsert({
-                    "symbol": symbol,
-                    "direction": final_dir,
-                    "is_ready": ready,  # This now strictly requires the turn
-                    "last_updated": datetime.now().isoformat()
-                    # ... other fields
-                }, on_conflict="symbol").execute()
-                # 6. DYNAMIC STOP LOSS (Extreme Price)
+                is_ready = all([d_rsi_ok, w_rsi_ok, macd_ok])
+
+                # 6. POPULATE LOGIC TRAIL (Fixes Reporter Crash)
+                logic_trail = {
+                    "d_rsi": round(float(curr_rsi), 1),
+                    "w_rsi": round(float(curr_w_rsi), 1),
+                    "macd_ready": bool(macd_ok),
+                    "score": sum([d_rsi_ok, w_rsi_ok, macd_ok])
+                }
+
+                # 7. TRACK EXTREME PRICE
                 low_val, high_val = df['low'].iloc[-1], df['high'].iloc[-1]
                 if existing.data:
-                    old_ext = existing.data[0]['extreme_price']
+                    old_ext = existing.data[0].get('extreme_price')
                     ext_price = min(low_val, old_ext) if final_dir == 'LONG' else max(high_val, old_ext)
                 else:
                     ext_price = low_val if final_dir == 'LONG' else high_val
 
-                # 7. UPSERT
+                # 8. UPSERT
                 supabase.table("signal_watchlist").upsert({
                     "symbol": symbol, "direction": final_dir, "is_ready": is_ready,
                     "extreme_price": float(ext_price), "rsi_touch_value": float(curr_rsi),
-                    "atr": float(atr), "last_updated": datetime.now().isoformat()
+                    "atr": float(atr), "logic_trail": logic_trail, "last_updated": datetime.now().isoformat()
                 }, on_conflict="symbol").execute()
 
         except Exception as e:

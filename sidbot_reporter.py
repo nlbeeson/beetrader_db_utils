@@ -22,8 +22,8 @@ def generate_html_report():
     for row in data:
         symbol, direction = row['symbol'], row['direction']
 
-        # SAFETY CHECK: If logic_trail is NULL, use an empty dictionary
-        trail = row.get('logic_trail') or {}
+        trail = row.get('logic_trail') or {}  # Added safety check
+        if not isinstance(trail, dict): trail = {}  # Extra safety
 
         d_rsi, w_rsi = trail.get('d_rsi', 0), trail.get('w_rsi', 0)
         slope, cross = trail.get('macd_ready', False), trail.get('macd_cross', False)
