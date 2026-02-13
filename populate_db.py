@@ -29,13 +29,20 @@ def get_ticker_universe():
 
     try:
         res = requests.get(iwv_url, headers=headers)
-        # utf-8-sig handles the Byte Order Mark often found in iShares CSVs
+        # Try reading with utf-8-sig to handle Byte Order Marks
+        # We use skiprows=9 as confirmed by your check
         df = pd.read_csv(io.StringIO(res.text), skiprows=9, encoding='utf-8-sig')
 
-        # Clean the tickers: ensure they are strings, 5 chars or less, and all letters
-        equities = [str(t).strip() for t in df['Ticker'].dropna().unique()
-                    if len(str(t)) <= 5 and str(t).isalpha()]
-        print(f"✅ Scraped {len(equities)} equities from Russell 3000.")
+        # If 'Ticker' isn't the column name, let's find it dynamically
+        ticker_col = next((c for c in df.columns if 'Ticker' in c), None)
+
+        if ticker_col:
+            equities = [str(t).strip() for t in df[ticker_col].dropna().unique()
+                        if len(str(t)) <= 5 and str(t).isalpha()]
+            print(f"✅ Scraped {len(equities)} equities from Russell 3000.")
+        else:
+            raise ValueError("Could not find Ticker column")
+
     except Exception as e:
         print(f"⚠️ Russell 3000 scrape failed ({e}). Using fallback list.")
         equities = ['AAPL', 'MSFT', 'TSLA', 'AMZN', 'GOOGL']
@@ -46,3 +53,64 @@ def get_ticker_universe():
              'EUR/AUD', 'AUD/CAD', 'NZD/CAD', 'EUR/CHF', 'AUD/CHF', 'CAD/CHF']
 
     crypto = ['BTC/USD', 'ETH/USD']
+    return {"EQUITY": equities, "FOREX": forex, "CRYPTO": crypto}
+
+
+# --- 3. CORE FETCHER ---
+def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_class):
+    start_date = datetime.now() - timedelta(days=days_back)
+    is_alt = asset_class in ['FOREX', 'CRYPTO']
+    client = crypto_client if is_alt else stock_client
+
+    for i in range(0, len(symbols), 50):
+        batch = symbols[i:i + 50]
+        try:
+            if is_alt:
+                req = CryptoBarsRequest(symbol_or_symbols=batch, timeframe=timeframe_obj, start=start_date)
+                bars = client.get_crypto_bars(req)
+            else:
+                req = StockBarsRequest(symbol_or_symbols=batch, timeframe=timeframe_obj, start=start_date,
+                                       adjustment='all')
+                bars = client.get_stock_bars(req)
+
+            records = []
+            if bars.data:
+                for symbol, bar_list in bars.data.items():
+                    for b in bar_list:
+                        records.append({
+                            "symbol": symbol.replace('/', ''),
+                            "asset_class": asset_class,
+                            "timestamp": b.timestamp.isoformat(),
+                            "open": b.open, "high": b.high, "low": b.low, "close": b.close,
+                            "volume": b.volume, "vwap": b.vwap, "timeframe": timeframe_label,
+                            "source": "ALPACA"
+                        })
+
+            if records:
+                for j in range(0, len(records), 1000):
+                    # We specify the constraint columns exactly to fix the 409 error
+                    supabase.table("market_data").upsert(
+                        records[j:j + 1000],
+                        on_conflict="symbol,timestamp,timeframe"
+                    ).execute()
+                print(f"✅ {asset_class} | {timeframe_label} | Batch {i // 50 + 1} uploaded.")
+
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"❌ Error on {asset_class} batch {batch[0]}: {e}")
+
+
+# --- 4. EXECUTION ---
+if __name__ == "__main__":
+    universe = get_ticker_universe()
+
+    targets = [
+        {"label": "1Day", "tf": TimeFrame.Day, "days": 3285},
+        {"label": "4Hour", "tf": TimeFrame(4, TimeFrameUnit.Hour), "days": 730},
+        {"label": "1Hour", "tf": TimeFrame.Hour, "days": 365},
+        {"label": "15Min", "tf": TimeFrame(15, TimeFrameUnit.Minute), "days": 180}
+    ]
+
+    for target in targets:
+        for a_class, s_list in universe.items():
+            populate_lane(s_list, target["tf"], target["label"], target["days"], a_class)
