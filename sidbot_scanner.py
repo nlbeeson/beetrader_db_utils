@@ -33,35 +33,30 @@ def run_sidbot_scanner():
     clients = get_clients()
     supabase = clients['supabase_client']
 
+    # 1. PRUNE: Remove signals older than 21 days
     logger.info("🧹 Pruning signals older than 21 days...")
     cutoff = (datetime.now() - timedelta(days=21)).isoformat()
     supabase.table("signal_watchlist").delete().lt("last_updated", cutoff).execute()
 
-    # Optimized Query: Only fetch symbols from the 1Day timeframe
-    active_tickers_resp = supabase.table("market_data").select("symbol").eq("timeframe", "1Day").execute()
-    symbols = list(set([item['symbol'] for item in active_tickers_resp.data]))
+    # 2. FIXED: Pull from Master List (ticker_metadata) instead of market_data
+    # This ensures we see all 2,798 symbols regardless of database limits
+    logger.info("📡 Fetching Master Ticker List...")
+    meta_resp = supabase.table("ticker_metadata").select("symbol").execute()
+    symbols = [item['symbol'] for item in meta_resp.data]
 
-    # Fetch entire existing watchlist to avoid O(N) queries in the loop
-    watchlist_resp = supabase.table("signal_watchlist").select("*").execute()
-    watchlist = {item['symbol']: item for item in watchlist_resp.data}
+    logger.info(f"🔎 Scanning {len(symbols)} symbols for SidBot criteria...")
 
-    logger.info(f"🔎 Scanning {len(symbols)} symbols...")
-
-    bulk_results = []
-    batch_size = 50  # Smaller batch for stability with 17M rows
+    batch_to_upsert = []
 
     for symbol in symbols:
         try:
-            # Increased limit to 250 for RSI accuracy (1 year of daily bars)
-            daily_data = supabase.table("market_data").select("*").eq("symbol", symbol).eq("timeframe", "1Day").order(
-                "timestamp", desc=True).limit(250).execute()
+            # Indexed Query: Fast lookup for specific symbol
+            daily_data = supabase.table("market_data").select("*") \
+                .eq("symbol", symbol).eq("timeframe", "1Day") \
+                .order("timestamp", desc=True).limit(100).execute()
 
-            if len(daily_data.data) < 50: continue  # Need enough data for stable indicators
+            if len(daily_data.data) < 26: continue
             df_daily = pd.DataFrame(daily_data.data).iloc[::-1]
-            
-            # Ensure numeric types for indicators
-            for col in ['open', 'high', 'low', 'close']:
-                df_daily[col] = pd.to_numeric(df_daily[col], errors='coerce')
 
             # Indicators
             rsi_ser = RSIIndicator(close=df_daily['close']).rsi()
@@ -75,31 +70,28 @@ def run_sidbot_scanner():
 
             if curr_w_rsi is None: continue
 
-            # Directional Entry Logic (RSI Touch)
+            # Directional Entry Logic
             direction = 'LONG' if curr_rsi <= 30 else ('SHORT' if curr_rsi >= 70 else None)
 
-            # Check existing watchlist entry from memory
-            existing_entry = watchlist.get(symbol)
+            # Fetch existing to track extreme price
+            existing = supabase.table("signal_watchlist").select("*").eq("symbol", symbol).execute()
 
-            if direction or existing_entry:
-                final_dir = direction if direction else existing_entry['direction']
-                ext_price = existing_entry['extreme_price'] if existing_entry else df_daily['close'].iloc[-1]
+            if direction or existing.data:
+                final_dir = direction if direction else existing.data[0]['direction']
+                ext_price = existing.data[0]['extreme_price'] if existing.data else df_daily['close'].iloc[-1]
 
-                # Update Extreme Price for Stop Loss
                 if final_dir == 'LONG':
                     ext_price = min(df_daily['low'].iloc[-1], ext_price)
                 else:
                     ext_price = max(df_daily['high'].iloc[-1], ext_price)
 
-                # The 4 Hard Rules
                 rsi_up = curr_rsi > prev_rsi if final_dir == 'LONG' else curr_rsi < prev_rsi
                 w_rsi_up = curr_w_rsi > prev_w_rsi if final_dir == 'LONG' else curr_w_rsi < prev_w_rsi
                 macd_up = curr_macd > prev_macd if final_dir == 'LONG' else curr_macd < prev_macd
 
                 is_ready = all([rsi_up, w_rsi_up, macd_up])
 
-                # Prepare for Bulk Upsert
-                bulk_results.append({
+                batch_to_upsert.append({
                     "symbol": symbol,
                     "direction": final_dir,
                     "rsi_touch_value": float(curr_rsi),
@@ -114,17 +106,19 @@ def run_sidbot_scanner():
                     "last_updated": datetime.now().isoformat()
                 })
 
-                if len(bulk_results) >= batch_size:
-                    supabase.table("signal_watchlist").upsert(bulk_results, on_conflict="symbol,direction").execute()
-                    bulk_results = []
+                # Bulk Upsert
+                if len(batch_to_upsert) >= 50:
+                    supabase.table("signal_watchlist").upsert(batch_to_upsert, on_conflict="symbol,direction").execute()
+                    batch_to_upsert = []
 
         except Exception as e:
             logger.error(f"❌ Error scanning {symbol}: {e}")
 
-    # Final flush
-    if bulk_results:
-        supabase.table("signal_watchlist").upsert(bulk_results, on_conflict="symbol,direction").execute()
-        logger.info(f"🏁 Final scan complete. Watchlist updated.")
+    # Final Flush
+    if batch_to_upsert:
+        supabase.table("signal_watchlist").upsert(batch_to_upsert, on_conflict="symbol,direction").execute()
+
+    logger.info("🏁 Scan Complete.")
 
 
 if __name__ == "__main__":
