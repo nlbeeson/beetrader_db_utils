@@ -102,13 +102,12 @@ def sync_ticker_metadata(symbols):
         supabase.table("ticker_metadata").upsert(records, on_conflict="symbol").execute()
 
 def populate_market_data():
-    import glob  # Add this at the top of the file
+    import glob
     clients = get_clients()
     supabase = clients['supabase_client']
     alpaca = clients['alpaca_client']
 
     # 1. DYNAMIC FILE DISCOVERY
-    # Looks for any XML file in ticker_imports that starts with 'iShares'
     ishares_files = glob.glob("ticker_imports/iShares*.xml")
     main_file = ishares_files[0] if ishares_files else None
     extra_file = "ticker_imports/manual_watchlist.csv"
@@ -120,12 +119,16 @@ def populate_market_data():
     else:
         logger.error("❌ No iShares XML file found in ticker_imports/")
 
-        extra_symbols = get_additional_tickers(extra_file)
-        combined_symbols = list(set(symbols + extra_symbols))
+    extra_symbols = get_additional_tickers(extra_file)
 
-        # Rest of the script remains the same...
+    # FIX: Initialize combined_symbols outside of conditional blocks
+    combined_symbols = list(set(symbols + extra_symbols))
 
-    # 2. Sync metadata first to ensure the 'map' is correct
+    if not combined_symbols:
+        logger.error("🚫 No symbols found to process. Exiting.")
+        return
+
+    # 2. Sync metadata first
     sync_ticker_metadata(combined_symbols)
 
     # 3. Process lanes (Daily and Hourly)
