@@ -1,6 +1,4 @@
 import time
-import requests
-import io
 import pandas as pd
 import os
 from datetime import datetime, timedelta
@@ -12,52 +10,60 @@ from supabase import create_client
 
 # --- 1. CONFIGURATION ---
 load_dotenv()
-ALPACA_KEY = os.getenv('APCA_API_KEY_ID')
-ALPACA_SECRET = os.getenv('APCA_API_SECRET_KEY')
+ALPACA_KEY = os.getenv('ALPACA_KEY')
+ALPACA_SECRET = os.getenv('ALPACA_SECRET')
 SUPABASE_URL = os.getenv('SUPABASE_URL')
-SUPABASE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
+SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 
+# Initialize Clients
 stock_client = StockHistoricalDataClient(ALPACA_KEY, ALPACA_SECRET)
 crypto_client = CryptoHistoricalDataClient(ALPACA_KEY, ALPACA_SECRET)
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 # --- 2. TICKER UNIVERSE ---
-from get_all_tickers import get_tickers as gt
-
-
 def get_ticker_universe():
-    print("🚀 Fetching tickers from exchange lists...")
+    print("📂 Loading tickers from provided CSV file...")
     try:
-        # This fetches directly from NYSE/NASDAQ/AMEX lists
-        # It's much more stable than the iShares CSV
-        tickers = gt.get_tickers()
+        # Load from your uploaded file
+        df = pd.read_csv('russell_2000_components.csv')
+        csv_tickers = df['Ticker'].dropna().unique().tolist()
 
-        # Filter: Only stocks (no warrants/preferred), 5 chars or less, all letters
-        equities = [str(t).strip() for t in tickers
-                    if len(str(t)) <= 5 and str(t).isalpha()]
+        # Merge with your core high-volume watchlist
+        watchlist = [
+            'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'PLTR', 'SQ',
+            'PYPL', 'SHOP', 'UBER', 'ABNB', 'SNOW', 'COIN', 'MARA', 'RIOT'
+        ]
 
-        # Limit to ~1000 to keep your storage manageable as planned
-        equities = equities[:1000]
+        # Clean and combine
+        combined = list(set([str(t).strip() for t in (csv_tickers + watchlist)]))
 
-        print(f"✅ Success! Retrieved {len(equities)} tickers.")
+        # Filter for Alpaca-friendly symbols
+        equities = [t for t in combined if len(t) <= 5 and t.isalpha()]
+
+        print(f"✅ Success! Prepared {len(equities)} total equities for population.")
     except Exception as e:
-        print(f"⚠️ Exchange fetch failed ({e}). Using fallback.")
-        equities = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA']
+        print(f"❌ Error loading CSV: {e}")
+        exit(1)
 
-    forex = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'AUD/USD', 'USD/CAD', 'USD/CHF', 'NZD/USD',
-             'EUR/JPY', 'GBP/JPY', 'GBP/NZD', 'EUR/NZD', 'CHF/JPY', 'GBP/AUD', 'GBP/CAD',
-             'GBP/CHF', 'NZD/JPY', 'EUR/CAD', 'CAD/JPY', 'AUD/NZD', 'AUD/JPY', 'NZD/CHF',
-             'EUR/AUD', 'AUD/CAD', 'NZD/CAD', 'EUR/CHF', 'AUD/CHF', 'CAD/CHF']
+    forex = [
+        'EUR/USD', 'USD/JPY', 'GBP/USD', 'AUD/USD', 'USD/CAD', 'USD/CHF', 'NZD/USD',
+        'EUR/JPY', 'GBP/JPY', 'GBP/NZD', 'EUR/NZD', 'CHF/JPY', 'GBP/AUD', 'GBP/CAD',
+        'GBP/CHF', 'NZD/JPY', 'EUR/CAD', 'CAD/JPY', 'AUD/NZD', 'AUD/JPY', 'NZD/CHF',
+        'EUR/AUD', 'AUD/CAD', 'NZD/CAD', 'EUR/CHF', 'AUD/CHF', 'CAD/CHF'
+    ]
 
     crypto = ['BTC/USD', 'ETH/USD']
     return {"EQUITY": equities, "FOREX": forex, "CRYPTO": crypto}
+
+
 # --- 3. CORE FETCHER ---
 def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_class):
     start_date = datetime.now() - timedelta(days=days_back)
     is_alt = asset_class in ['FOREX', 'CRYPTO']
     client = crypto_client if is_alt else stock_client
 
+    # Process in batches of 50 to respect API limits
     for i in range(0, len(symbols), 50):
         batch = symbols[i:i + 50]
         try:
@@ -83,17 +89,17 @@ def populate_lane(symbols, timeframe_obj, timeframe_label, days_back, asset_clas
                         })
 
             if records:
+                # Chunk the upload to Supabase (1000 rows at a time)
                 for j in range(0, len(records), 1000):
-                    # We specify the constraint columns exactly to fix the 409 error
                     supabase.table("market_data").upsert(
                         records[j:j + 1000],
                         on_conflict="symbol,timestamp,timeframe"
                     ).execute()
-                print(f"✅ {asset_class} | {timeframe_label} | Batch {i // 50 + 1} uploaded.")
+                print(f"✅ {asset_class} | {timeframe_label} | Batch {i // 50 + 1} ({batch[0]}...) uploaded.")
 
-            time.sleep(0.5)
+            time.sleep(0.5)  # Rate limit safety
         except Exception as e:
-            print(f"❌ Error on {asset_class} batch {batch[0]}: {e}")
+            print(f"❌ Error on {asset_class} batch starting with {batch[0]}: {e}")
 
 
 # --- 4. EXECUTION ---
