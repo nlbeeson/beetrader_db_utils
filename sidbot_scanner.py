@@ -34,17 +34,13 @@ def run_sidbot_scanner():
     clients = get_clients()
     supabase = clients['supabase_client']
 
-    # Load earnings calendar into memory
-    earn_resp = supabase.table("earnings_calendar").select("*").execute()
-    earnings_map = {item['symbol']: item['report_date'] for item in earn_resp.data}
-
     # 1. PRUNE: Remove signals older than 28 days
     logger.info("🧹 Pruning signals older than 28 days...")
     cutoff = (datetime.now() - timedelta(days=28)).isoformat()
     supabase.table("signal_watchlist").delete().lt("last_updated", cutoff).execute()
 
     # 2. FETCH FULL MASTER LIST (Bypassing 1000 row limit)
-    logger.info("📡 Fetching Full Master Ticker List...")
+    logger.info("📡 Fetching Master Ticker List...")
     symbols = []
     offset = 0
     while True:
@@ -54,10 +50,11 @@ def run_sidbot_scanner():
         if len(batch) < 1000: break
         offset += 1000
 
-    # 3. PRE-LOAD SIGNAL WATCHLIST (Optimization: 1 request instead of 2800)
-    logger.info("⚡ Pre-loading existing signals into memory...")
+    # 3. PRE-LOAD DATA (Dictionary lookup for speed)
     watchlist_resp = supabase.table("signal_watchlist").select("*").execute()
     watchlist_map = {item['symbol']: item for item in watchlist_resp.data}
+    earn_resp = supabase.table("earnings_calendar").select("*").execute()
+    earnings_map = {item['symbol']: item['report_date'] for item in earn_resp.data}
 
     logger.info(f"🔎 Scanning {len(symbols)} symbols...")
     bulk_results = []
@@ -74,50 +71,50 @@ def run_sidbot_scanner():
 
             # Indicators
             rsi_ser = RSIIndicator(close=df_daily['close']).rsi()
-            macd_line = MACD(close=df_daily['close']).macd()
+            macd_obj = MACD(close=df_daily['close'])
+            macd_line = macd_obj.macd()
+            signal_line = macd_obj.macd_signal()
             atr_val = AverageTrueRange(high=df_daily['high'], low=df_daily['low'],
                                        close=df_daily['close']).average_true_range().iloc[-1]
 
             curr_rsi, prev_rsi = rsi_ser.iloc[-1], rsi_ser.iloc[-2]
             curr_macd, prev_macd = macd_line.iloc[-1], macd_line.iloc[-2]
+            curr_sig = signal_line.iloc[-1]
             curr_w_rsi, prev_w_rsi = get_weekly_rsi_resampled(df_daily)
 
             if curr_w_rsi is None: continue
 
             # Entry Logic (RSI Touch)
             direction = 'LONG' if curr_rsi <= 30 else ('SHORT' if curr_rsi >= 70 else None)
-
-            # Use Local Map instead of API call
             existing_data = watchlist_map.get(symbol)
 
             if direction or existing_data:
                 final_dir = direction if direction else existing_data['direction']
                 ext_price = existing_data['extreme_price'] if existing_data else df_daily['close'].iloc[-1]
 
-                # Update Trailing Stop Loss logic
+                # Trailing Stop Loss logic
                 if final_dir == 'LONG':
                     ext_price = min(df_daily['low'].iloc[-1], ext_price)
                 else:
                     ext_price = max(df_daily['high'].iloc[-1], ext_price)
 
-                # --- Earnings Safety Check ---
+                # --- EARNINGS CHECK (Hard Rule) ---
                 report_date_str = earnings_map.get(symbol)
                 earnings_safe = True
-
                 if report_date_str:
                     report_date = datetime.strptime(report_date_str, '%Y-%m-%d').date()
-                    days_to_earnings = (report_date - datetime.now().date()).days
+                    days_to = (report_date - datetime.now().date()).days
+                    if 0 <= days_to <= 7: earnings_safe = False
 
-                    # Hard Rule: Avoid entry if earnings are within the next 7 days
-                    if 0 <= days_to_earnings <= 7:
-                        earnings_safe = False
-
-                # The 4 Hard Rules
+                # --- 4 HARD RULES ---
                 rsi_up = curr_rsi > prev_rsi if final_dir == 'LONG' else curr_rsi < prev_rsi
                 w_rsi_up = curr_w_rsi > prev_w_rsi if final_dir == 'LONG' else curr_w_rsi < prev_w_rsi
-                macd_up = curr_macd > prev_macd if final_dir == 'LONG' else curr_macd < prev_macd
+                macd_slope_ready = curr_macd > prev_macd if final_dir == 'LONG' else curr_macd < prev_macd
 
-                is_ready = all([rsi_up, w_rsi_up, macd_up])
+                is_ready = all([rsi_up, w_rsi_up, macd_slope_ready, earnings_safe])
+
+                # --- SECONDARY CONFIRMATIONS (Multipliers) ---
+                macd_cross = curr_macd > curr_sig if final_dir == 'LONG' else curr_macd < curr_sig
 
                 bulk_results.append({
                     "symbol": symbol,
@@ -126,15 +123,16 @@ def run_sidbot_scanner():
                     "extreme_price": float(ext_price),
                     "atr": float(atr_val),
                     "is_ready": is_ready,
+                    "next_earnings": report_date_str,
                     "logic_trail": {
                         "d_rsi": float(curr_rsi),
                         "w_rsi": float(curr_w_rsi),
-                        "macd_slope": "up" if macd_up else "down"
+                        "macd_ready": bool(macd_slope_ready),
+                        "macd_cross": bool(macd_cross)
                     },
                     "last_updated": datetime.now().isoformat()
                 })
 
-                # Batch Upsert (Every 100 results)
                 if len(bulk_results) >= 100:
                     supabase.table("signal_watchlist").upsert(bulk_results, on_conflict="symbol,direction").execute()
                     bulk_results = []
@@ -142,11 +140,9 @@ def run_sidbot_scanner():
         except Exception as e:
             logger.error(f"❌ Error scanning {symbol}: {e}")
 
-    # Final Flush
     if bulk_results:
         supabase.table("signal_watchlist").upsert(bulk_results, on_conflict="symbol,direction").execute()
-
-    logger.info("🏁 Final scan complete. Watchlist updated.")
+    logger.info("🏁 Final scan complete.")
 
 
 if __name__ == "__main__":
