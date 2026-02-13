@@ -46,24 +46,47 @@ def get_additional_tickers(file_path):
 
 
 def get_tickers_from_ishares_xml(file_path):
-    import pandas as pd
-    try:
-        # Trick: Many iShares 'XML' files are actually HTML tables.
-        # This will attempt to read the 'Holdings' table directly.
-        dfs = pd.read_html(file_path)
-        for df in dfs:
-            if 'Ticker' in df.columns:
-                return df['Ticker'].dropna().unique().tolist()
+    import xml.etree.ElementTree as ET
+    import os
+
+    if not os.path.exists(file_path):
+        logger.error(f"File not found: {file_path}")
         return []
+
+    try:
+        # Microsoft Excel XML Namespace
+        ns = {'ss': 'urn:schemas-microsoft-com:office:spreadsheet'}
+        tree = ET.parse(file_path)
+        root = tree.getroot()
+
+        tickers = []
+        # 1. Find the 'Holdings' Worksheet
+        worksheet = root.find(".//ss:Worksheet[@ss:Name='Holdings']", ns)
+        if worksheet is None:
+            logger.error("Could not find 'Holdings' worksheet in XML")
+            return []
+
+        # 2. Iterate through rows in the Table
+        rows = worksheet.findall(".//ss:Row", ns)
+
+        # Row 0-8 are headers/disclaimers. Row 9 is the header 'Ticker'.
+        # Data starts at Row 10.
+        for row in rows[10:]:
+            cells = row.findall("ss:Cell", ns)
+            if cells:
+                # The Ticker is always in the first cell (index 0)
+                data_tag = cells[0].find("ss:Data", ns)
+                if data_tag is not None and data_tag.text:
+                    ticker = str(data_tag.text).strip()
+                    # Filter out non-ticker strings (like disclaimers)
+                    if ticker and len(ticker) <= 5 and ticker.isupper():
+                        tickers.append(ticker)
+
+        logger.info(f"✅ Successfully extracted {len(tickers)} tickers from iShares XML.")
+        return tickers
+
     except Exception as e:
-        logger.error(f"Error parsing iShares XML: {e}")
-        # If HTML fails, try a standard CSV read as a fallback
-        try:
-            df = pd.read_csv(file_path, skiprows=9)
-            if 'Ticker' in df.columns:
-                return df['Ticker'].dropna().unique().tolist()
-        except:
-            pass
+        logger.error(f"❌ Critical Error parsing iShares SpreadsheetML: {e}")
         return []
 
 
