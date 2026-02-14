@@ -104,8 +104,8 @@ def run_sidbot_scanner():
                 report_dt = datetime.strptime(next_earnings_date, '%Y-%m-%d').date()
                 days_to_earnings = (report_dt - datetime.now().date()).days
 
-            # Hard Rule: Skip if earnings are in 3 days or less
-            earnings_safe = days_to_earnings > 3
+            # Hard Rule: Skip if earnings are in 14 days or less
+            earnings_safe = days_to_earnings > 14
 
             existing = supabase.table("signal_watchlist").select("*").eq("symbol", symbol).execute()
             if existing.data and not final_dir:
