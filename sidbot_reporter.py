@@ -29,17 +29,19 @@ def generate_html_report():
         slope, cross = trail.get('macd_ready', False), trail.get('macd_cross', False)
 
 
-        earn_val = row.get('next_earnings', 'N/A')
-        earn_disp = earn_val
-        if earn_val and earn_val != 'N/A':
+        # Inside the row loop in sidbot_reporter.py
+        earn_date_str = row.get('next_earnings')
+        if earn_date_str:
             try:
-                dt = datetime.strptime(earn_val, '%Y-%m-%d').date()
-                days = (dt - datetime.now().date()).days
-                earn_disp = f"{dt.strftime('%b %d')} ({days}d)"
-                if 0 <= days <= 14:
+                earn_dt = datetime.strptime(earn_date_str, '%Y-%m-%d').date()
+                days_left = (earn_dt - datetime.now().date()).days
+                earn_disp = f"{days_left}d ({earn_date_str})"
+                if 0 <= days_left <= 14:
                     earn_disp = f'<span style="color:#e74c3c;font-weight:bold;">⚠️ {earn_disp}</span>'
             except:
-                pass
+                earn_disp = "Invalid Date"
+        else:
+            earn_disp = "N/A"
 
         if row['is_ready']: ready_count += 1
         score = 1 + (1 if slope else 0) + (1 if cross else 0)

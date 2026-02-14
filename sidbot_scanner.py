@@ -95,11 +95,16 @@ def run_sidbot_scanner():
                 .limit(1) \
                 .execute()
 
-            days_to_earnings = 99  # Default if no data found
-            if earnings_resp.data:
-                report_date = datetime.strptime(earnings_resp.data[0]['report_date'], '%Y-%m-%d').date()
-                days_to_earnings = (report_date - datetime.now().date()).days
+            # Store the actual date string, or None if not found
+            next_earnings_date = None
+            days_to_earnings = 999  # Safe default for logic check
 
+            if earnings_resp.data:
+                next_earnings_date = earnings_resp.data[0]['report_date']
+                report_dt = datetime.strptime(next_earnings_date, '%Y-%m-%d').date()
+                days_to_earnings = (report_dt - datetime.now().date()).days
+
+            # Hard Rule: Skip if earnings are in 3 days or less
             earnings_safe = days_to_earnings > 3
 
             existing = supabase.table("signal_watchlist").select("*").eq("symbol", symbol).execute()
@@ -124,6 +129,7 @@ def run_sidbot_scanner():
                     "w_rsi": round(float(curr_w_rsi), 1),
                     "macd_ready": bool(macd_ok),
                     "earnings_safe": bool(earnings_safe),
+                    "next_earnings": next_earnings_date,
                     "days_to_earnings": int(days_to_earnings),
                     "score": total_score  # This is now the 0-3 Conviction Score
                 }
@@ -139,7 +145,7 @@ def run_sidbot_scanner():
                 # Upsert to DB
                 supabase.table("signal_watchlist").upsert({
                     "symbol": symbol, "direction": final_dir, "is_ready": bool(is_ready),
-                    "next_earnings": int(days_to_earnings),
+                    "next_earnings": next_earnings_date,
                     "extreme_price": float(ext_price), "rsi_touch_value": float(curr_rsi),
                     "atr": float(atr), "logic_trail": logic_trail, "last_updated": datetime.now().isoformat()
                 }, on_conflict="symbol").execute()
