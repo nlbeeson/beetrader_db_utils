@@ -24,22 +24,31 @@ def run_backfill():
     supabase = clients['supabase_client']
 
     # 1. IDENTIFY UNDER-SEASONED TICKERS
-    # We look for symbols with less than 250 bars in the 1Day timeframe
+    # We pull from ticker_metadata to ensure all tracked stocks are covered
     logger.info("🔍 Identifying tickers with insufficient history (min 250 bars)...")
 
-    # Fetch all symbols currently in the daily lane
-    active_tickers_resp = supabase.table("market_data").select("symbol").eq("timeframe", "1Day").execute()
+    # Fetch all symbols from ticker_metadata
+    ticker_resp = supabase.table("ticker_metadata").select("symbol").execute()
+    all_target_symbols = [item['symbol'] for item in ticker_resp.data]
 
-    if not active_tickers_resp.data:
-        logger.error("No data found in market_data. Aborting.")
+    if not all_target_symbols:
+        logger.error("No symbols found in ticker_metadata. Aborting.")
         return
 
-    # Count occurrences of each symbol
-    all_symbols = [item['symbol'] for item in active_tickers_resp.data]
-    df_counts = pd.Series(all_symbols).value_counts()
+    # Fetch counts from market_data
+    active_tickers_resp = supabase.table("market_data").select("symbol").eq("timeframe", "1Day").execute()
+    
+    symbol_counts = {}
+    if active_tickers_resp.data:
+        all_present_symbols = [item['symbol'] for item in active_tickers_resp.data]
+        symbol_counts = pd.Series(all_present_symbols).value_counts().to_dict()
 
-    # Filter for those below the 250-bar stability threshold
-    under_seasoned = df_counts[df_counts < 250].index.tolist()
+    # Filter for those below the 250-bar stability threshold or missing entirely
+    under_seasoned = []
+    for symbol in all_target_symbols:
+        count = symbol_counts.get(symbol, 0)
+        if count < 250:
+            under_seasoned.append(symbol)
 
     if not under_seasoned:
         logger.info("✅ All tickers meet the 250-bar requirement.")

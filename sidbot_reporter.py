@@ -31,7 +31,7 @@ def generate_html_report():
 
         # Inside the row loop in sidbot_reporter.py
         earn_date_str = row.get('next_earnings')
-        if earn_date_str:
+        if earn_date_str and earn_date_str != 'N/A':
             try:
                 earn_dt = datetime.strptime(earn_date_str, '%Y-%m-%d').date()
                 days_left = (earn_dt - datetime.now().date()).days

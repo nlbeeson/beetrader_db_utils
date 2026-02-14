@@ -104,18 +104,20 @@ def run_sidbot_scanner():
                 report_dt = datetime.strptime(next_earnings_date, '%Y-%m-%d').date()
                 days_to_earnings = (report_dt - datetime.now().date()).days
 
-            # Hard Rule: Skip if earnings are in 14 days or less
-            earnings_safe = days_to_earnings > 14
+            # Hard Rule: Skip if earnings are in 3 days or less
+            earnings_safe = days_to_earnings > 3
 
             existing = supabase.table("signal_watchlist").select("*").eq("symbol", symbol).execute()
             if existing.data and not final_dir:
                 final_dir = existing.data[0]["direction"]
 
             if final_dir:
-                # GATES (Hard Rules)
+                # GATES (The Turn)
                 d_rsi_ok = (curr_rsi > prev_rsi) if final_dir == "LONG" else (curr_rsi < prev_rsi)
                 w_rsi_ok = (curr_w_rsi > prev_w_rsi) if final_dir == "LONG" else (curr_w_rsi < prev_w_rsi)
                 macd_ok = (curr_macd > prev_macd) if final_dir == "LONG" else (curr_macd < prev_macd)
+
+                # If all 3 are true, the stock is 'Ready' (Earnings must also be safe)
                 is_ready = all([d_rsi_ok, w_rsi_ok, macd_ok, earnings_safe])
 
                 # SCORING (Conviction Points)
@@ -131,7 +133,7 @@ def run_sidbot_scanner():
                     "earnings_safe": bool(earnings_safe),
                     "next_earnings": next_earnings_date,
                     "days_to_earnings": int(days_to_earnings),
-                    "score": total_score  # This is now the 0-3 Conviction Score
+                    "score": total_score
                 }
 
                 # Dynamic Stop Loss
@@ -142,12 +144,17 @@ def run_sidbot_scanner():
                 else:
                     ext_price = low_val if final_dir == "LONG" else high_val
 
-                # Upsert to DB
+                # UPSERT (Includes the actual DATE string for Supabase)
                 supabase.table("signal_watchlist").upsert({
-                    "symbol": symbol, "direction": final_dir, "is_ready": bool(is_ready),
+                    "symbol": symbol,
+                    "direction": final_dir,
+                    "is_ready": bool(is_ready),
                     "next_earnings": next_earnings_date,
-                    "extreme_price": float(ext_price), "rsi_touch_value": float(curr_rsi),
-                    "atr": float(atr), "logic_trail": logic_trail, "last_updated": datetime.now().isoformat()
+                    "extreme_price": float(ext_price),
+                    "rsi_touch_value": float(curr_rsi),
+                    "atr": float(atr),
+                    "logic_trail": logic_trail,
+                    "last_updated": datetime.now().isoformat()
                 }, on_conflict="symbol").execute()
 
         except Exception as e:
