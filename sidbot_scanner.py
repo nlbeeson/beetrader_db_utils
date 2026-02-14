@@ -86,6 +86,22 @@ def run_sidbot_scanner():
             elif curr_rsi >= 55:
                 final_dir = "SHORT"
 
+            # EARNINGS CHECK
+            earnings_resp = supabase.table("earnings_calendar") \
+                .select("report_date") \
+                .eq("symbol", symbol) \
+                .gte("report_date", datetime.now().date().isoformat()) \
+                .order("report_date") \
+                .limit(1) \
+                .execute()
+
+            days_to_earnings = 99  # Default if no data found
+            if earnings_resp.data:
+                report_date = datetime.strptime(earnings_resp.data[0]['report_date'], '%Y-%m-%d').date()
+                days_to_earnings = (report_date - datetime.now().date()).days
+
+            earnings_safe = days_to_earnings > 3
+
             existing = supabase.table("signal_watchlist").select("*").eq("symbol", symbol).execute()
             if existing.data and not final_dir:
                 final_dir = existing.data[0]["direction"]
@@ -95,7 +111,7 @@ def run_sidbot_scanner():
                 d_rsi_ok = (curr_rsi > prev_rsi) if final_dir == "LONG" else (curr_rsi < prev_rsi)
                 w_rsi_ok = (curr_w_rsi > prev_w_rsi) if final_dir == "LONG" else (curr_w_rsi < prev_w_rsi)
                 macd_ok = (curr_macd > prev_macd) if final_dir == "LONG" else (curr_macd < prev_macd)
-                is_ready = all([d_rsi_ok, w_rsi_ok, macd_ok])
+                is_ready = all([d_rsi_ok, w_rsi_ok, macd_ok, earnings_safe])
 
                 # SCORING (Conviction Points)
                 pattern_score = detect_reversal_pattern(df, final_dir)
@@ -107,6 +123,8 @@ def run_sidbot_scanner():
                     "d_rsi": round(float(curr_rsi), 1),
                     "w_rsi": round(float(curr_w_rsi), 1),
                     "macd_ready": bool(macd_ok),
+                    "earnings_safe": bool(earnings_safe),
+                    "days_to_earnings": int(days_to_earnings),
                     "score": total_score  # This is now the 0-3 Conviction Score
                 }
 
@@ -121,6 +139,7 @@ def run_sidbot_scanner():
                 # Upsert to DB
                 supabase.table("signal_watchlist").upsert({
                     "symbol": symbol, "direction": final_dir, "is_ready": bool(is_ready),
+                    "next_earnings": int(days_to_earnings),
                     "extreme_price": float(ext_price), "rsi_touch_value": float(curr_rsi),
                     "atr": float(atr), "logic_trail": logic_trail, "last_updated": datetime.now().isoformat()
                 }, on_conflict="symbol").execute()
