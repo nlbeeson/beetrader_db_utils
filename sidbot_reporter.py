@@ -44,7 +44,7 @@ def generate_html_report():
             earn_disp = "N/A"
 
         if row['is_ready']: ready_count += 1
-        score = 1 + (1 if slope else 0) + (1 if cross else 0)
+        score = trail.get('score', 0)
         color = "#27ae60" if direction == "LONG" else "#e74c3c"
 
         row_html = f"""

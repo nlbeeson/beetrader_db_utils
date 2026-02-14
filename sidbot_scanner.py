@@ -130,6 +130,7 @@ def run_sidbot_scanner():
                     "d_rsi": round(float(curr_rsi), 1),
                     "w_rsi": round(float(curr_w_rsi), 1),
                     "macd_ready": bool(macd_ok),
+                    "macd_cross": bool(cross_score > 0),
                     "earnings_safe": bool(earnings_safe),
                     "next_earnings": next_earnings_date,
                     "days_to_earnings": int(days_to_earnings),
