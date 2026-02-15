@@ -7,6 +7,7 @@ from ta.momentum import RSIIndicator
 from ta.trend import MACD
 from ta.volatility import AverageTrueRange
 from populate_db import get_clients
+import math
 
 # --- 0. LOGGING SETUP ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -134,13 +135,34 @@ def run_sidbot_scanner():
                             # For SHORT: Only update if today's high is HIGHER than the stored extreme
                             ext_price = max(high_val, float(stored_extreme))
 
-                # 9. UPSERT TO SUPABASE
+
+                # 1. Capture current closing price
+                current_close = float(df_daily['close'].iloc[-1])
+
+                # 2. Re-apply your specific stop loss rounding logic
+                def calculate_formatted_stop(price, direction):
+                    if direction == 'LONG':
+                        # Long: 150.50 -> 150; 150.00 -> 149
+                        return float(price - 1 if price.is_integer() else math.floor(price))
+                    else:
+                        # Short: 150.25 -> 151; 150.00 -> 151
+                        return float(price + 1 if price.is_integer() else math.ceil(price))
+
+                final_stop = calculate_formatted_stop(ext_price, final_dir)
+
+                #9 UPSERT TO SUPABASE
                 supabase.table("signal_watchlist").upsert({
-                    "symbol": symbol, "direction": final_dir, "rsi_touch_value": float(curr_rsi),
-                    "extreme_price": float(ext_price), "atr": float(atr_val),
-                    "is_ready": bool(is_ready), "next_earnings": next_earnings_date, "logic_trail": logic_trail,
-                    "last_updated": datetime.now().isoformat()
+                    "symbol": symbol,
+                    "extreme_price": float(ext_price),
+                    "stop_loss": final_stop,
+                    "entry_price": current_close,  # NEW: Save current close as entry basis
+                    "is_ready": bool(is_ready),
+                    "last_updated": datetime.now().isoformat(),
+                    "next_earnings": next_earnings_date,
+                    "logic_trail": logic_trail,
                 }, on_conflict="symbol").execute()
+
+
         except Exception as e:
             logger.error(f"❌ Error scanning {symbol}: {e}")
 
