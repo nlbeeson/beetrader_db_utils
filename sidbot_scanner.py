@@ -115,11 +115,24 @@ def run_sidbot_scanner():
                                "macd_ready": bool(macd_ok), "score": total_score}
 
                 # 8. DYNAMIC STOP LOSS
-                low_val, high_val = df_daily['low'].iloc[-1], df_daily['high'].iloc[-1]
-                ext_price = min(low_val,
-                                existing.data[0].get('extreme_price') or 999999) if final_dir == 'LONG' else max(
-                    high_val, existing.data[0].get(
-                        'extreme_price') or 0) if existing.data else low_val if final_dir == 'LONG' else high_val
+                # Current bar extremes
+                low_val = float(df_daily['low'].iloc[-1])
+                high_val = float(df_daily['high'].iloc[-1])
+
+                # Initialize with current values if no existing data
+                ext_price = low_val if final_dir == 'LONG' else high_val
+
+                if existing.data:
+                    # Get the previously stored extreme price from Supabase
+                    stored_extreme = existing.data[0].get('extreme_price')
+
+                    if stored_extreme is not None:
+                        if final_dir == 'LONG':
+                            # For LONG: Only update if today's low is LOWER than the stored extreme
+                            ext_price = min(low_val, float(stored_extreme))
+                        else:
+                            # For SHORT: Only update if today's high is HIGHER than the stored extreme
+                            ext_price = max(high_val, float(stored_extreme))
 
                 # 9. UPSERT TO SUPABASE
                 supabase.table("signal_watchlist").upsert({
