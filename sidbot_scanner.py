@@ -54,7 +54,8 @@ def run_sidbot_scanner():
     supabase = clients['supabase_client']
 
     # 1. FETCH MASTER LIST & MARKET CONTEXT
-    tickers_resp = supabase.table("ticker_metadata").select("symbol").execute()
+    # Updated to use the consolidated ticker_reference table
+    tickers_resp = supabase.table("ticker_reference").select("symbol").execute()
     symbols = [item['symbol'] for item in tickers_resp.data]
 
     spy_data = supabase.table("market_data").select("close").eq("symbol", "SPY").eq("timeframe", "1Day").order(
@@ -107,13 +108,20 @@ def run_sidbot_scanner():
 
                 is_ready = all([d_rsi_ok, w_rsi_ok, macd_ok, (days_to_earnings > 3)])
 
-                # 7. CONVICTION SCORE (Score 0-3)
-                total_score = int(detect_reversal_pattern(df_daily, final_dir) + (
-                    1 if (spy_up if final_dir == 'LONG' else not spy_up) else 0) + detect_macd_crossover(df_daily,
-                                                                                                         final_dir))
+                # 7. CONVICTION ALIGNMENT (New Individual Boolean Columns)
+                macd_cross = bool(detect_macd_crossover(df_daily, final_dir))
+                pattern_confirmed = bool(detect_reversal_pattern(df_daily, final_dir))
+                spy_alignment = bool(spy_up if final_dir == 'LONG' else not spy_up)
 
-                logic_trail = {"d_rsi": round(float(curr_rsi), 1), "w_rsi": round(float(curr_w_rsi), 1),
-                               "macd_ready": bool(macd_ok), "score": total_score}
+                # Calculate Total Score (0-3)
+                total_score = int(macd_cross + pattern_confirmed + spy_alignment)
+
+                # Maintain logic_trail for detailed history if needed, but primary data is now in columns
+                logic_trail = {
+                    "d_rsi": round(float(curr_rsi), 1),
+                    "w_rsi": round(float(curr_w_rsi), 1),
+                    "macd_ready": bool(macd_ok)
+                }
 
                 # 8. DYNAMIC STOP LOSS
                 # Current bar extremes
@@ -150,12 +158,17 @@ def run_sidbot_scanner():
 
                 final_stop = calculate_formatted_stop(ext_price, final_dir)
 
-                #9 UPSERT TO SUPABASE
+                # 9. UPSERT TO SUPABASE (Updated for new schema)
                 supabase.table("signal_watchlist").upsert({
                     "symbol": symbol,
+                    "direction": final_dir,
                     "extreme_price": float(ext_price),
                     "stop_loss": final_stop,
-                    "entry_price": current_close,  # NEW: Save current close as entry basis
+                    "entry_price": current_close,
+                    "market_score": total_score,
+                    "macd_cross": macd_cross,
+                    "pattern_confirmed": pattern_confirmed,
+                    "spy_alignment": spy_alignment,
                     "is_ready": bool(is_ready),
                     "last_updated": datetime.now().isoformat(),
                     "next_earnings": next_earnings_date,
