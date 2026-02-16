@@ -88,7 +88,7 @@ def run_sidbot_scanner():
             elif curr_rsi >= 55:
                 direction = 'SHORT'
 
-            existing = supabase.table("signal_watchlist").select("*").eq("symbol", symbol).execute()
+            existing = supabase.table("sid_signal_watchlist").select("*").eq("symbol", symbol).execute()
             if direction or existing.data:
                 final_dir = direction if direction else existing.data[0]['direction']
 
@@ -159,7 +159,7 @@ def run_sidbot_scanner():
                 final_stop = calculate_formatted_stop(ext_price, final_dir)
 
                 # 9. UPSERT TO SUPABASE (Updated for new schema)
-                supabase.table("signal_watchlist").upsert({
+                supabase.table("sid_signal_watchlist").upsert({
                     "symbol": symbol,
                     "direction": final_dir,
                     "extreme_price": float(ext_price),
