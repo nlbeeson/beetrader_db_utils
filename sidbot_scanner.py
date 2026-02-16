@@ -106,7 +106,7 @@ def run_sidbot_scanner():
                     days_to_earnings = (
                                 datetime.strptime(next_earnings_date, '%Y-%m-%d').date() - datetime.now().date()).days
 
-                is_ready = all([d_rsi_ok, w_rsi_ok, macd_ok, (days_to_earnings > 3)])
+                is_ready = all([d_rsi_ok, w_rsi_ok, macd_ok, (days_to_earnings > 14)])
 
                 # 7. CONVICTION ALIGNMENT (New Individual Boolean Columns)
                 macd_cross = bool(detect_macd_crossover(df_daily, final_dir))
