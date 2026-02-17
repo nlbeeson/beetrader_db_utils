@@ -88,7 +88,7 @@ def run_sidbot_scanner():
             elif curr_rsi >= 55:
                 direction = 'SHORT'
 
-            existing = supabase.table("sid_signal_watchlist").select("*").eq("symbol", symbol).execute()
+            existing = supabase.table("sid_method_signal_watchlist").select("*").eq("symbol", symbol).execute()
             if direction or existing.data:
                 final_dir = direction if direction else existing.data[0]['direction']
 
