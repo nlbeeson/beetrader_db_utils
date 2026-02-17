@@ -159,7 +159,7 @@ def run_sidbot_scanner():
                 final_stop = calculate_formatted_stop(ext_price, final_dir)
 
                 # 9. UPSERT TO SUPABASE (Updated for new schema)
-                supabase.table("sid_signal_watchlist").upsert({
+                supabase.table("sid_method_signal_watchlist").upsert({
                     "symbol": symbol,
                     "direction": final_dir,
                     "extreme_price": float(ext_price),
