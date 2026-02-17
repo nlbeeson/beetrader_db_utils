@@ -28,7 +28,7 @@ def run_backfill():
     logger.info("🔍 Identifying tickers with insufficient history (min 250 bars)...")
 
     # Fetch all symbols from ticker_metadata
-    ticker_resp = supabase.table("ticker_metadata").select("symbol").execute()
+    ticker_resp = supabase.table("ticker_reference").select("symbol").execute()
     all_target_symbols = [item['symbol'] for item in ticker_resp.data]
 
     if not all_target_symbols:

@@ -99,7 +99,7 @@ def sync_ticker_metadata(symbols):
     logger.info(f"🔄 Syncing {len(records)} symbols to metadata...")
     if records:
         # This uses the simplified schema we confirmed in your last error log
-        supabase.table("ticker_metadata").upsert(records, on_conflict="symbol").execute()
+        supabase.table("ticker_reference").upsert(records, on_conflict="symbol").execute()
 
 def populate_market_data():
     import glob

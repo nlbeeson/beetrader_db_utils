@@ -25,7 +25,7 @@ def run_daily_update():
 
     # 1. GET SYMBOLS
     # We pull from ticker_metadata so it always matches what you intend to track
-    ticker_resp = supabase.table("ticker_metadata").select("symbol").execute()
+    ticker_resp = supabase.table("ticker_reference").select("symbol").execute()
     symbols = [item['symbol'] for item in ticker_resp.data]
 
     if not symbols:
