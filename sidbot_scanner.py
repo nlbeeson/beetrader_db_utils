@@ -54,7 +54,6 @@ def run_sidbot_scanner():
     supabase = clients['supabase_client']
 
     # 1. FETCH MASTER LIST & MARKET CONTEXT
-    # Updated to use the consolidated ticker_reference table
     tickers_resp = supabase.table("ticker_reference").select("symbol").execute()
     symbols = [item['symbol'] for item in tickers_resp.data]
 
@@ -64,10 +63,10 @@ def run_sidbot_scanner():
 
     for symbol in symbols:
         try:
-            # 2. GET DATA (100 days for indicators)
+            # 2. GET DATA (Need enough for 14-period RSI + 28-day lookback)
             daily_data = supabase.table("market_data").select("*").eq("symbol", symbol).eq("timeframe", "1Day").order(
                 "timestamp", desc=True).limit(100).execute()
-            if len(daily_data.data) < 35: continue
+            if len(daily_data.data) < 50: continue  # Increased safety margin
             df_daily = pd.DataFrame(daily_data.data).iloc[::-1]
 
             # 3. CALCULATE INDICATORS
@@ -76,105 +75,113 @@ def run_sidbot_scanner():
             macd_line = macd_obj.macd()
             atr_val = AverageTrueRange(high=df_daily['high'], low=df_daily['low'],
                                        close=df_daily['close']).average_true_range().iloc[-1]
+
             curr_rsi, prev_rsi = rsi_daily_ser.iloc[-1], rsi_daily_ser.iloc[-2]
             curr_macd, prev_macd = macd_line.iloc[-1], macd_line.iloc[-2]
+
             curr_w_rsi, prev_w_rsi = get_weekly_rsi_resampled(df_daily)
             if curr_w_rsi is None: continue
 
-            # 4. MOMENTUM ROOM DIRECTION (45/55)
+            # --- 4. SID METHOD DIRECTIONAL LOGIC (The Re-Added Part) ---
+
+            # Lookback check: Did RSI touch <= 30 or >= 70 in the last 28 bars?
+            rsi_lookback = rsi_daily_ser.iloc[-28:]
+            touched_oversold = (rsi_lookback <= 30).any()
+            touched_overbought = (rsi_lookback >= 70).any()
+
             direction = None
-            if curr_rsi <= 45:
+            # Only consider a NEW direction if it hit the extreme AND is still in the "room"
+            if touched_oversold and curr_rsi <= 45:
                 direction = 'LONG'
-            elif curr_rsi >= 55:
+            elif touched_overbought and curr_rsi >= 55:
                 direction = 'SHORT'
 
+            # Check if we already have this in our watchlist
             existing = supabase.table("sid_method_signal_watchlist").select("*").eq("symbol", symbol).execute()
-            if direction or existing.data:
-                final_dir = direction if direction else existing.data[0]['direction']
 
-                # 5. GATES (The Turn)
-                d_rsi_ok = (curr_rsi > prev_rsi) if final_dir == 'LONG' else (curr_rsi < prev_rsi)
-                w_rsi_ok = (curr_w_rsi > prev_w_rsi) if final_dir == 'LONG' else (curr_w_rsi < prev_w_rsi)
-                macd_ok = (curr_macd > prev_macd) if final_dir == 'LONG' else (curr_macd < prev_macd)
+            # If no valid direction found today AND no existing record, we skip.
+            if not direction and not existing.data:
+                continue
 
-                # 6. EARNINGS COUNTDOWN
-                earnings_resp = supabase.table("earnings_calendar").select("report_date").eq("symbol", symbol).gte(
-                    "report_date", datetime.now().date().isoformat()).order("report_date").limit(1).execute()
-                next_earnings_date, days_to_earnings = None, 999
-                if earnings_resp.data:
-                    next_earnings_date = earnings_resp.data[0]['report_date']
-                    days_to_earnings = (
-                                datetime.strptime(next_earnings_date, '%Y-%m-%d').date() - datetime.now().date()).days
+            # Determine final direction (Today's signal takes priority over existing)
+            final_dir = direction if direction else existing.data[0]['direction']
 
-                is_ready = all([d_rsi_ok, w_rsi_ok, macd_ok, (days_to_earnings > 14)])
+            # --- VALIDATION & CLEANUP ---
+            # If the trade has moved past the 45/55 threshold, remove it from the watchlist
+            if (final_dir == 'LONG' and curr_rsi > 45) or (final_dir == 'SHORT' and curr_rsi < 55):
+                logger.info(f"🧹 Removing {symbol} from watchlist: RSI {curr_rsi:.1f} moved past {final_dir} limit.")
+                supabase.table("sid_method_signal_watchlist").delete().eq("symbol", symbol).execute()
+                continue
 
-                # 7. CONVICTION ALIGNMENT (New Individual Boolean Columns)
-                macd_cross = bool(detect_macd_crossover(df_daily, final_dir))
-                pattern_confirmed = bool(detect_reversal_pattern(df_daily, final_dir))
-                spy_alignment = bool(spy_up if final_dir == 'LONG' else not spy_up)
+            # 5. GATES (The Turn)
+            d_rsi_ok = (curr_rsi > prev_rsi) if final_dir == 'LONG' else (curr_rsi < prev_rsi)
+            w_rsi_ok = (curr_w_rsi > prev_w_rsi) if final_dir == 'LONG' else (curr_w_rsi < prev_w_rsi)
+            macd_ok = (curr_macd > prev_macd) if final_dir == 'LONG' else (curr_macd < prev_macd)
 
-                # Calculate Total Score (0-3)
-                total_score = int(macd_cross + pattern_confirmed + spy_alignment)
+            # 6. EARNINGS COUNTDOWN
+            earnings_resp = supabase.table("earnings_calendar").select("report_date").eq("symbol", symbol).gte(
+                "report_date", datetime.now().date().isoformat()).order("report_date").limit(1).execute()
+            next_earnings_date, days_to_earnings = None, 999
+            if earnings_resp.data:
+                next_earnings_date = earnings_resp.data[0]['report_date']
+                days_to_earnings = (
+                        datetime.strptime(next_earnings_date, '%Y-%m-%d').date() - datetime.now().date()).days
 
-                # Maintain logic_trail for detailed history if needed, but primary data is now in columns
-                logic_trail = {
-                    "d_rsi": round(float(curr_rsi), 1),
-                    "w_rsi": round(float(curr_w_rsi), 1),
-                    "macd_ready": bool(macd_ok)
-                }
+            # is_ready requires the "The Turn" plus a safe earnings window
+            is_ready = all([d_rsi_ok, w_rsi_ok, macd_ok, (days_to_earnings > 14)])
 
-                # 8. DYNAMIC STOP LOSS
-                # Current bar extremes
-                low_val = float(df_daily['low'].iloc[-1])
-                high_val = float(df_daily['high'].iloc[-1])
+            # 7. CONVICTION ALIGNMENT
+            macd_cross = bool(detect_macd_crossover(df_daily, final_dir))
+            pattern_confirmed = bool(detect_reversal_pattern(df_daily, final_dir))
+            spy_alignment = bool(spy_up if final_dir == 'LONG' else not spy_up)
+            total_score = int(macd_cross + pattern_confirmed + spy_alignment)
 
-                # Initialize with current values if no existing data
-                ext_price = low_val if final_dir == 'LONG' else high_val
+            logic_trail = {
+                "d_rsi": round(float(curr_rsi), 1),
+                "w_rsi": round(float(curr_w_rsi), 1),
+                "macd_ready": bool(macd_ok),
+                "touched_extreme": bool(touched_oversold if final_dir == 'LONG' else touched_overbought)
+            }
 
-                if existing.data:
-                    # Get the previously stored extreme price from Supabase
-                    stored_extreme = existing.data[0].get('extreme_price')
+            # 8. DYNAMIC STOP LOSS
+            low_val = float(df_daily['low'].iloc[-1])
+            high_val = float(df_daily['high'].iloc[-1])
+            ext_price = low_val if final_dir == 'LONG' else high_val
 
-                    if stored_extreme is not None:
-                        if final_dir == 'LONG':
-                            # For LONG: Only update if today's low is LOWER than the stored extreme
-                            ext_price = min(low_val, float(stored_extreme))
-                        else:
-                            # For SHORT: Only update if today's high is HIGHER than the stored extreme
-                            ext_price = max(high_val, float(stored_extreme))
-
-
-                # 1. Capture current closing price
-                current_close = float(df_daily['close'].iloc[-1])
-
-                # 2. Re-apply your specific stop loss rounding logic
-                def calculate_formatted_stop(price, direction):
-                    if direction == 'LONG':
-                        # Long: 150.50 -> 150; 150.00 -> 149
-                        return float(price - 1 if price.is_integer() else math.floor(price))
+            if existing.data:
+                stored_extreme = existing.data[0].get('extreme_price')
+                if stored_extreme is not None:
+                    if final_dir == 'LONG':
+                        ext_price = min(low_val, float(stored_extreme))
                     else:
-                        # Short: 150.25 -> 151; 150.00 -> 151
-                        return float(price + 1 if price.is_integer() else math.ceil(price))
+                        ext_price = max(high_val, float(stored_extreme))
 
-                final_stop = calculate_formatted_stop(ext_price, final_dir)
+            current_close = float(df_daily['close'].iloc[-1])
 
-                # 9. UPSERT TO SUPABASE (Updated for new schema)
-                supabase.table("sid_method_signal_watchlist").upsert({
-                    "symbol": symbol,
-                    "direction": final_dir,
-                    "extreme_price": float(ext_price),
-                    "stop_loss": final_stop,
-                    "entry_price": current_close,
-                    "market_score": total_score,
-                    "macd_cross": macd_cross,
-                    "pattern_confirmed": pattern_confirmed,
-                    "spy_alignment": spy_alignment,
-                    "is_ready": bool(is_ready),
-                    "last_updated": datetime.now().isoformat(),
-                    "next_earnings": next_earnings_date,
-                    "logic_trail": logic_trail,
-                }, on_conflict="symbol").execute()
+            def calculate_formatted_stop(price, direction):
+                if direction == 'LONG':
+                    return float(price - 1 if price.is_integer() else math.floor(price))
+                else:
+                    return float(price + 1 if price.is_integer() else math.ceil(price))
 
+            final_stop = calculate_formatted_stop(ext_price, final_dir)
+
+            # 9. UPSERT TO SUPABASE
+            supabase.table("sid_method_signal_watchlist").upsert({
+                "symbol": symbol,
+                "direction": final_dir,
+                "extreme_price": float(ext_price),
+                "stop_loss": final_stop,
+                "entry_price": current_close,
+                "market_score": total_score,
+                "macd_cross": macd_cross,
+                "pattern_confirmed": pattern_confirmed,
+                "spy_alignment": spy_alignment,
+                "is_ready": bool(is_ready),
+                "last_updated": datetime.now().isoformat(),
+                "next_earnings": next_earnings_date,
+                "logic_trail": logic_trail,
+            }, on_conflict="symbol").execute()
 
         except Exception as e:
             logger.error(f"❌ Error scanning {symbol}: {e}")

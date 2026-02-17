@@ -18,7 +18,7 @@ def update_global_earnings():
     try:
         df = pd.read_csv(url)
         # 2. Get the list of tickers you actually track
-        meta_resp = supabase.table("ticker_metadata").select("symbol").execute()
+        meta_resp = supabase.table("ticker_reference").select("symbol").execute()
         my_symbols = [item['symbol'] for item in meta_resp.data]
 
         # 3. Filter and Format
