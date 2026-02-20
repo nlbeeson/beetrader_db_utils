@@ -175,15 +175,20 @@ def get_tickers_from_ishares_xml(file_path):
 
 
 def sync_ticker_metadata(symbols):
-    """Cleaned metadata sync to match your existing Supabase schema"""
+    """Refactored metadata sync with symbol validation."""
     supabase = get_clients()['supabase_client']
-    # Removed 'source' and 'asset_class' since they caused errors
-    records = [{"symbol": str(s).strip()} for s in symbols if len(str(s)) <= 5]
 
-    logger.info(f"🔄 Syncing {len(records)} symbols to metadata...")
+    # Validation: Must be 1-5 chars, uppercase alphanumeric (standard for tickers)
+    records = [
+        {"symbol": str(s).strip().upper()}
+        for s in symbols
+        if s and 1 <= len(str(s).strip()) <= 5 and str(s).strip().isalnum()
+    ]
+
+    logger.info(f"🔄 Syncing {len(records)} validated symbols to metadata...")
     if records:
-        # This uses the simplified schema we confirmed in your last error log
         supabase.table("ticker_reference").upsert(records, on_conflict="symbol").execute()
+
 
 def populate_market_data():
     import glob
