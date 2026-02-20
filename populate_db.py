@@ -40,14 +40,14 @@ def get_db_connection():
 
 
 def bulk_upsert_market_data(data_tuples, timeframe):
-    """Targets specific partitioned tables: market_data_15m, 1h, 4h, 1d."""
+    """Targets specific partitioned tables with shortened names."""
     conn = get_db_connection()
     if not conn: return
     cur = conn.cursor()
 
-    # Dynamically set the table name based on the shortened timeframe
-    table_name = f"market_data_{timeframe}"
+    table_name = f"market_data_{timeframe}"  # Targets market_data_1d, etc.
 
+    # The conflict target MUST match the UNIQUE constraint added above
     query = f"""
         INSERT INTO public.{table_name} 
         (symbol, asset_class, timestamp, open, high, low, close, volume, vwap, trade_count, timeframe, source)
