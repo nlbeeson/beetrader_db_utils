@@ -70,14 +70,14 @@ def run_sidbot_scanner():
     tickers_resp = supabase.table("ticker_reference").select("symbol").execute()
     symbols = [item['symbol'] for item in tickers_resp.data]
 
-    spy_data = supabase.table("market_data").select("close").eq("symbol", "SPY").eq("timeframe", "1Day").order(
+    spy_data = supabase.table("market_data").select("close").eq("symbol", "SPY").eq("timeframe", "1d").order(
         "timestamp", desc=True).limit(2).execute()
     spy_up = spy_data.data[0]['close'] > spy_data.data[1]['close'] if len(spy_data.data) > 1 else True
 
     for symbol in symbols:
         try:
             # 2. GET HISTORICAL DATA
-            daily_data = supabase.table("market_data").select("*").eq("symbol", symbol).eq("timeframe", "1Day").order(
+            daily_data = supabase.table("market_data").select("*").eq("symbol", symbol).eq("timeframe", "1d").order(
                 "timestamp", desc=True).limit(100).execute()
             if len(daily_data.data) < 50: continue
             df_daily = pd.DataFrame(daily_data.data).iloc[::-1]

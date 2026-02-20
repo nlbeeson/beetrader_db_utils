@@ -6,7 +6,7 @@ load_dotenv()
 
 # You can find your Connection String in Supabase -> Settings -> Database
 # It looks like: postgres://postgres.[USER]:[PASSWORD]@[HOST]:5432/postgres
-DB_CONNECTION_STRING = os.getenv("SUPABASE_DB_URL")
+DB_CONNECTION_STRING = os.getenv("DB_CONNECTION_STRING") or os.getenv("SUPABASE_DB_URL")
 
 def run_heavy_commands():
     try:

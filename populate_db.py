@@ -1,6 +1,8 @@
 import os
 import logging
 import pandas as pd
+import psycopg2
+from psycopg2.extras import execute_values
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from supabase import create_client
@@ -12,6 +14,7 @@ from alpaca.data.timeframe import TimeFrame
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+DB_CONN = os.getenv("DB_CONNECTION_STRING") or os.getenv("SUPABASE_DB_URL")
 ALPACA_KEY = os.getenv("APCA_API_KEY_ID")
 ALPACA_SECRET = os.getenv("APCA_API_SECRET_KEY")
 
@@ -24,6 +27,86 @@ def get_clients():
         "supabase_client": create_client(SUPABASE_URL, SUPABASE_KEY),
         "alpaca_client": StockHistoricalDataClient(ALPACA_KEY, ALPACA_SECRET)
     }
+
+
+def get_db_connection():
+    """Returns a direct psycopg2 connection to the database."""
+    try:
+        conn = psycopg2.connect(DB_CONN)
+        return conn
+    except Exception as e:
+        logger.error(f"❌ Database connection failed: {e}")
+        return None
+
+
+def bulk_upsert_market_data(data_tuples):
+    """Efficiently upserts data into the partitioned market_data table."""
+    conn = get_db_connection()
+    if not conn: return
+    cur = conn.cursor()
+    
+    # Using (symbol, timestamp, timeframe) as conflict target as 'id' is generated
+    query = """
+        INSERT INTO public.market_data 
+        (symbol, asset_class, timestamp, open, high, low, close, volume, vwap, trade_count, timeframe, source)
+        VALUES %s
+        ON CONFLICT (symbol, timestamp, timeframe) DO UPDATE SET
+            close = EXCLUDED.close,
+            high = GREATEST(market_data.high, EXCLUDED.high),
+            low = LEAST(market_data.low, EXCLUDED.low),
+            volume = market_data.volume + EXCLUDED.volume,
+            vwap = EXCLUDED.vwap,
+            trade_count = EXCLUDED.trade_count;
+    """
+    try:
+        execute_values(cur, query, data_tuples)
+        conn.commit()
+        logger.info(f"✅ Bulk upserted {len(data_tuples)} records.")
+    except Exception as e:
+        logger.error(f"❌ Error in bulk_upsert_market_data: {e}")
+        conn.rollback()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def aggregate_timeframes(symbol, source_tf='15m', target_tf='1h'):
+    """Aggregates smaller timeframes into larger ones for the partitioned table."""
+    interval_map = {'1h': '1 hour', '4h': '4 hours', '1d': '1 day'}
+    conn = get_db_connection()
+    if not conn: return
+    cur = conn.cursor()
+    
+    query = f"""
+        INSERT INTO public.market_data (
+            symbol, asset_class, timestamp, open, high, low, close, volume, timeframe, source
+        )
+        SELECT 
+            symbol,
+            MAX(asset_class),
+            date_trunc('{interval_map[target_tf].split()[1]}', timestamp) as bucket,
+            (ARRAY_AGG(open ORDER BY timestamp ASC))[1],
+            MAX(high),
+            MIN(low),
+            (ARRAY_AGG(close ORDER BY timestamp DESC))[1],
+            SUM(volume),
+            %s,
+            MAX(source)
+        FROM public.market_data
+        WHERE timeframe = %s AND symbol = %s
+        GROUP BY symbol, bucket
+        ON CONFLICT (symbol, timestamp, timeframe) DO NOTHING;
+    """
+    try:
+        cur.execute(query, (target_tf, source_tf, symbol))
+        conn.commit()
+        logger.info(f"✅ Aggregated {symbol} from {source_tf} to {target_tf}.")
+    except Exception as e:
+        logger.error(f"❌ Error aggregating {symbol}: {e}")
+        conn.rollback()
+    finally:
+        cur.close()
+        conn.close()
 
 
 def get_additional_tickers(file_path):
@@ -131,10 +214,11 @@ def populate_market_data():
     # 2. Sync metadata first
     sync_ticker_metadata(combined_symbols)
 
-    # 3. Process lanes (Daily and Hourly)
+    # 3. Process lanes (15m, 1h, 1d)
     tf_configs = [
-        {"tf": TimeFrame.Day, "label": "1Day", "days": 1000, "batch": 50},
-        {"tf": TimeFrame.Hour, "label": "1Hour", "days": 365, "batch": 10},
+        {"tf": TimeFrame.Minute * 15, "label": "15m", "days": 30, "batch": 5},
+        {"tf": TimeFrame.Hour, "label": "1h", "days": 365, "batch": 10},
+        {"tf": TimeFrame.Day, "label": "1d", "days": 1000, "batch": 50},
     ]
 
     for config in tf_configs:
@@ -154,18 +238,42 @@ def populate_market_data():
                 bars = alpaca.get_stock_bars(request_params)
                 if bars.df.empty: continue
                 df = bars.df.reset_index()
+                
+                # Format for bulk_upsert_market_data
                 df['timestamp'] = df['timestamp'].apply(lambda x: x.isoformat())
                 df['timeframe'] = label
                 df['asset_class'] = "US_EQUITY"
                 df['source'] = "alpaca"
+                
+                # Alpaca bars may not have vwap/trade_count if they're old
+                if 'vwap' not in df.columns: df['vwap'] = None
+                if 'trade_count' not in df.columns: df['trade_count'] = None
 
-                records = df[['symbol', 'timestamp', 'open', 'high', 'low', 'close',
-                              'volume', 'timeframe', 'asset_class', 'source']].to_dict('records')
+                # Create tuples for psycopg2 execute_values
+                records = [
+                    (
+                        r['symbol'], r['asset_class'], r['timestamp'],
+                        float(r['open']), float(r['high']), float(r['low']), float(r['close']),
+                        float(r['volume']), float(r['vwap']) if r['vwap'] is not None else None,
+                        int(r['trade_count']) if r['trade_count'] is not None else None,
+                        r['timeframe'], r['source']
+                    )
+                    for _, r in df.iterrows()
+                ]
 
                 if records:
-                    supabase.table("market_data").upsert(records, on_conflict="symbol,timestamp,timeframe").execute()
+                    bulk_upsert_market_data(records)
+
+                # After 15m batch, we could trigger aggregation, but it's more efficient 
+                # to do it after all batches are processed or as a separate step.
             except Exception as e:
                 logger.error(f"❌ Error in batch {batch}: {e}")
+
+    # Optional: Run aggregation for all symbols after the 15m data is in
+    for symbol in combined_symbols:
+        aggregate_timeframes(symbol, '15m', '1h')
+        aggregate_timeframes(symbol, '1h', '4h')
+        aggregate_timeframes(symbol, '1d', '1d') # Re-assert daily if needed, though usually direct.
 
 
 if __name__ == '__main__':

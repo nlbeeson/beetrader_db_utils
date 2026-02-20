@@ -20,9 +20,9 @@ def purge_rotating_data():
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
     # Retention Policy:
-    # 15Min: 180 Days
-    # 1Hour: 1 Year
-    # 4Hour: 2 Years
+    # 15m: 180 Days
+    # 1h: 1 Year
+    # 4h: 2 Years
     # Daily: Forever
     
     # Note: VACUUM usually cannot be run inside a transaction or via standard RPC 
@@ -30,9 +30,9 @@ def purge_rotating_data():
     # It's better to manage VACUUM via Supabase's built-in maintenance or a direct DB connection.
     
     queries = [
-        "DELETE FROM market_data WHERE timeframe = '15Min' AND timestamp < NOW() - INTERVAL '180 days';",
-        "DELETE FROM market_data WHERE timeframe = '1Hour' AND timestamp < NOW() - INTERVAL '1 year';",
-        "DELETE FROM market_data WHERE timeframe = '4Hour' AND timestamp < NOW() - INTERVAL '2 years';"
+        "DELETE FROM market_data WHERE timeframe = '15m' AND timestamp < NOW() - INTERVAL '180 days';",
+        "DELETE FROM market_data WHERE timeframe = '1h' AND timestamp < NOW() - INTERVAL '1 year';",
+        "DELETE FROM market_data WHERE timeframe = '4h' AND timestamp < NOW() - INTERVAL '2 years';"
     ]
 
     for q in queries:

@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from populate_db import get_clients
+from populate_db import get_clients, bulk_upsert_market_data
 
 # --- 0. LOGGING SETUP ---
 logging.basicConfig(
@@ -27,7 +27,7 @@ def run_backfill():
     # We pull from ticker_metadata to ensure all tracked stocks are covered
     logger.info("🔍 Identifying tickers with insufficient history (min 250 bars)...")
 
-    # Fetch all symbols from ticker_metadata
+    # Fetch all symbols from ticker_reference
     ticker_resp = supabase.table("ticker_reference").select("symbol").execute()
     all_target_symbols = [item['symbol'] for item in ticker_resp.data]
 
@@ -36,7 +36,7 @@ def run_backfill():
         return
 
     # Fetch counts from market_data
-    active_tickers_resp = supabase.table("market_data").select("symbol").eq("timeframe", "1Day").execute()
+    active_tickers_resp = supabase.table("market_data").select("symbol").eq("timeframe", "1d").execute()
     
     symbol_counts = {}
     if active_tickers_resp.data:
@@ -82,29 +82,31 @@ def run_backfill():
 
             df = df.reset_index()
 
-            # Map columns and format for Supabase
-            update_data = []
+            # Map columns and format for bulk_upsert
+            records = []
             for _, row in df.iterrows():
-                update_data.append({
-                    "symbol": symbol,
-                    "timeframe": "1Day",
-                    "timestamp": row['timestamp'].isoformat(),
-                    "open": float(row['open']),
-                    "high": float(row['high']),
-                    "low": float(row['low']),
-                    "close": float(row['close']),
-                    "volume": int(row['volume']),
-                    "asset_class": "US_EQUITY",
-                    "source": "alpaca"
-                })
+                # Alpaca bars may not have vwap/trade_count
+                vwap = float(row['vwap']) if 'vwap' in row and not pd.isna(row['vwap']) else None
+                trade_count = int(row['trade_count']) if 'trade_count' in row and not pd.isna(row['trade_count']) else None
+                
+                records.append((
+                    symbol,
+                    "US_EQUITY",
+                    row['timestamp'].isoformat(),
+                    float(row['open']),
+                    float(row['high']),
+                    float(row['low']),
+                    float(row['close']),
+                    float(row['volume']),
+                    vwap,
+                    trade_count,
+                    "1d",
+                    "alpaca"
+                ))
 
-            if update_data:
-                # Upsert ensures we fill holes without creating duplicates
-                supabase.table("market_data").upsert(
-                    update_data,
-                    on_conflict="symbol,timeframe,timestamp"
-                ).execute()
-                logger.info(f"✅ Successfully backfilled {symbol} ({len(update_data)} bars).")
+            if records:
+                bulk_upsert_market_data(records)
+                logger.info(f"✅ Successfully backfilled {symbol} ({len(records)} bars).")
 
         except Exception as e:
             logger.error(f"❌ Failed to backfill {symbol}: {e}")

@@ -9,7 +9,7 @@ def debug_symbol(symbol):
     supabase = clients['supabase_client']
 
     # Fetch data
-    data = supabase.table("market_data").select("*").eq("symbol", symbol).eq("timeframe", "1Day").order("timestamp",
+    data = supabase.table("market_data").select("*").eq("symbol", symbol).eq("timeframe", "1d").order("timestamp",
                                                                                                         desc=True).limit(
         100).execute()
     if not data.data:

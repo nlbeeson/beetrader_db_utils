@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from populate_db import get_clients
+from populate_db import get_clients, bulk_upsert_market_data
 
 # --- 0. LOGGING SETUP ---
 logging.basicConfig(
@@ -64,21 +64,27 @@ def run_daily_update():
                 df[col] = pd.to_numeric(df[col], errors='coerce')
             
             df['timestamp'] = df['timestamp'].apply(lambda x: x.isoformat())
-            df['timeframe'] = "1Day"
+            df['timeframe'] = "1d"
             df['asset_class'] = "US_EQUITY"
             df['source'] = "alpaca"
 
-            update_data = df[[
-                'symbol', 'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                'timeframe', 'asset_class', 'source'
-            ]].to_dict('records')
+            # Alpaca bars may not have vwap/trade_count
+            if 'vwap' not in df.columns: df['vwap'] = None
+            if 'trade_count' not in df.columns: df['trade_count'] = None
 
-            if update_data:
-                # Upsert ensures no duplicates on (symbol, timeframe, timestamp)
-                supabase.table("market_data").upsert(
-                    update_data,
-                    on_conflict="symbol,timeframe,timestamp"
-                ).execute()
+            records = [
+                (
+                    r['symbol'], r['asset_class'], r['timestamp'],
+                    float(r['open']), float(r['high']), float(r['low']), float(r['close']),
+                    float(r['volume']), float(r['vwap']) if r['vwap'] is not None else None,
+                    int(r['trade_count']) if r['trade_count'] is not None else None,
+                    r['timeframe'], r['source']
+                )
+                for _, r in df.iterrows()
+            ]
+
+            if records:
+                bulk_upsert_market_data(records)
 
         except Exception as e:
             logger.error(f"❌ Error updating batch starting with {batch[0]}: {e}")
