@@ -72,19 +72,23 @@ def run_daily_update():
             if 'vwap' not in df.columns: df['vwap'] = None
             if 'trade_count' not in df.columns: df['trade_count'] = None
 
+
             records = [
                 (
                     r['symbol'], r['asset_class'], r['timestamp'],
                     float(r['open']), float(r['high']), float(r['low']), float(r['close']),
                     float(r['volume']), float(r['vwap']) if r['vwap'] is not None else None,
                     int(r['trade_count']) if r['trade_count'] is not None else None,
-                    r['timeframe'], r['source']
+                    "1d",  # Use shortened timeframe name
+                    r['source']
                 )
                 for _, r in df.iterrows()
             ]
 
             if records:
-                bulk_upsert_market_data(records)
+                # Pass the timeframe to target the market_data_1d partition
+                bulk_upsert_market_data(records, "1d")
+            records = df.to_dict(orient='records')
 
         except Exception as e:
             logger.error(f"❌ Error updating batch starting with {batch[0]}: {e}")

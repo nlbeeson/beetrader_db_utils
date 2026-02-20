@@ -28,22 +28,20 @@ def purge_rotating_data():
     # Note: VACUUM usually cannot be run inside a transaction or via standard RPC 
     # unless 'run_sql' is specifically configured to handle it (which is rare/risky).
     # It's better to manage VACUUM via Supabase's built-in maintenance or a direct DB connection.
-    
+
     queries = [
-        "DELETE FROM market_data WHERE timeframe = '15m' AND timestamp < NOW() - INTERVAL '180 days';",
-        "DELETE FROM market_data WHERE timeframe = '1h' AND timestamp < NOW() - INTERVAL '1 year';",
-        "DELETE FROM market_data WHERE timeframe = '4h' AND timestamp < NOW() - INTERVAL '2 years';"
+        "DELETE FROM market_data_15m WHERE timestamp < NOW() - INTERVAL '180 days';",
+        "DELETE FROM market_data_1h WHERE timestamp < NOW() - INTERVAL '1 year';",
+        "DELETE FROM market_data_4h WHERE timestamp < NOW() - INTERVAL '2 years';"
     ]
 
     for q in queries:
         try:
-            # Assumes a stored procedure 'run_sql_maintenance' exists that executes the string
-            # Warning: Allowing raw SQL execution via RPC is a security risk. 
-            # Prefer specific RPCs for specific tasks if possible.
             supabase.rpc("run_sql_maintenance", {"query": q}).execute()
-            logger.info(f"✅ Executed: {q[:40]}...")
+            logger.info(f"✅ Executed: {q}")
         except Exception as e:
             logger.warning(f"⚠️ Task failed: {e}")
+
 
 
 if __name__ == "__main__":

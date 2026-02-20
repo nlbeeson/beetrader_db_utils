@@ -39,31 +39,33 @@ def get_db_connection():
         return None
 
 
-def bulk_upsert_market_data(data_tuples):
-    """Efficiently upserts data into the partitioned market_data table."""
+def bulk_upsert_market_data(data_tuples, timeframe):
+    """Targets specific partitioned tables: market_data_15m, 1h, 4h, 1d."""
     conn = get_db_connection()
     if not conn: return
     cur = conn.cursor()
-    
-    # Using (symbol, timestamp, timeframe) as conflict target as 'id' is generated
-    query = """
-        INSERT INTO public.market_data 
+
+    # Dynamically set the table name based on the shortened timeframe
+    table_name = f"market_data_{timeframe}"
+
+    query = f"""
+        INSERT INTO public.{table_name} 
         (symbol, asset_class, timestamp, open, high, low, close, volume, vwap, trade_count, timeframe, source)
         VALUES %s
         ON CONFLICT (symbol, timestamp, timeframe) DO UPDATE SET
             close = EXCLUDED.close,
-            high = GREATEST(market_data.high, EXCLUDED.high),
-            low = LEAST(market_data.low, EXCLUDED.low),
-            volume = market_data.volume + EXCLUDED.volume,
+            high = GREATEST({table_name}.high, EXCLUDED.high),
+            low = LEAST({table_name}.low, EXCLUDED.low),
+            volume = {table_name}.volume + EXCLUDED.volume,
             vwap = EXCLUDED.vwap,
             trade_count = EXCLUDED.trade_count;
     """
     try:
         execute_values(cur, query, data_tuples)
         conn.commit()
-        logger.info(f"✅ Bulk upserted {len(data_tuples)} records.")
+        logger.info(f"✅ Bulk upserted {len(data_tuples)} records into {table_name}.")
     except Exception as e:
-        logger.error(f"❌ Error in bulk_upsert_market_data: {e}")
+        logger.error(f"❌ Error in bulk_upsert_market_data for {table_name}: {e}")
         conn.rollback()
     finally:
         cur.close()
