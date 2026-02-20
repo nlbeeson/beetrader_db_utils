@@ -8,6 +8,7 @@ from ta.trend import MACD
 from ta.volatility import AverageTrueRange
 from populate_db import get_clients
 import math
+from pref_watchlist import PREF_WATCHLIST
 
 # --- 0. LOGGING SETUP ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -48,6 +49,9 @@ def detect_macd_crossover(df, direction):
         return 1 if (macd_line.iloc[-2] < signal_line.iloc[-2] and macd_line.iloc[-1] > signal_line.iloc[-1]) else 0
     return 1 if (macd_line.iloc[-2] > signal_line.iloc[-2] and macd_line.iloc[-1] < signal_line.iloc[-1]) else 0
 
+def is_on_preferred_watchlist(symbol):
+    """Checks if the symbol is on the preferred watchlist."""
+    return symbol in PREF_WATCHLIST
 
 def run_sidbot_scanner():
     clients = get_clients()
@@ -134,7 +138,8 @@ def run_sidbot_scanner():
             macd_cross = bool(detect_macd_crossover(df_daily, final_dir))
             pattern_confirmed = bool(detect_reversal_pattern(df_daily, final_dir))
             spy_alignment = bool(spy_up if final_dir == 'LONG' else not spy_up)
-            total_score = int(macd_cross + pattern_confirmed + spy_alignment)
+            preferred_watchlist = is_on_preferred_watchlist(symbol)
+            total_score = int(macd_cross + pattern_confirmed + spy_alignment + preferred_watchlist)
 
             logic_trail = {
                 "d_rsi": round(float(curr_rsi), 1),
@@ -181,6 +186,7 @@ def run_sidbot_scanner():
                 "last_updated": datetime.now().isoformat(),
                 "next_earnings": next_earnings_date,
                 "logic_trail": logic_trail,
+                "preferred_watchlist": preferred_watchlist,
             }, on_conflict="symbol").execute()
 
         except Exception as e:
