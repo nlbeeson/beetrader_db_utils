@@ -16,7 +16,7 @@ def get_tv_url(symbol):
 
 def generate_html_report():
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    data = supabase.table("signal_watchlist").select("*").execute().data
+    data = supabase.table("sid_method_signal_watchlist").select("*").execute().data
     conf_rows, pot_rows, ready_count = "", "", 0
 
     for row in data:
