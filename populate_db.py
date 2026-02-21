@@ -48,7 +48,7 @@ def bulk_upsert_market_data(data_tuples, timeframe):
     table_name = f"market_data_{timeframe}"  # Targets e.g., market_data_1h
 
     query = f"""
-        INSERT INTO public.{table_name} 
+        INSERT INTO public.{table_name}
         (symbol, asset_class, timestamp, open, high, low, close, volume, vwap, trade_count, timeframe, source)
         VALUES %s
         ON CONFLICT (symbol, timestamp, timeframe) DO UPDATE SET
